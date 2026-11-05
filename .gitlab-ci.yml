@@ -34,6 +34,7 @@ build-macos:
     when: always
     expire_in: 7 days
     paths:
-      - desktop/macos/build-dist/
+      - desktop/macos/build-dist/*.zip
+      - desktop/macos/build-dist/*.entitlements
   rules:
     - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "schedule"'

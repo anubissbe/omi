@@ -69,6 +69,27 @@ done
 (cd "$MACOS_DIR/pi-mono-extension" && npm ci --no-fund --no-audit)
 
 # ─── Swift release build ────────────────────────────────────────────────────
+# ─── Universal ffmpeg resource (same source as codemagic.yaml) ─────────────
+FFMPEG_RESOURCE="$MACOS_DIR/Desktop/Sources/Resources/ffmpeg"
+if ! file "$FFMPEG_RESOURCE" 2>/dev/null | grep -q "universal binary"; then
+    echo "==> Preparing universal ffmpeg"
+    TEMP_DIR="$(mktemp -d)"
+    curl -sL -o "$TEMP_DIR/arm64.zip" \
+        "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffmpeg.zip"
+    unzip -q -o "$TEMP_DIR/arm64.zip" -d "$TEMP_DIR/arm64/"
+    curl -sL -o "$TEMP_DIR/x86_64.zip" \
+        "https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/release/ffmpeg.zip"
+    unzip -q -o "$TEMP_DIR/x86_64.zip" -d "$TEMP_DIR/x86_64/"
+    ARM64_FF="$(find "$TEMP_DIR/arm64" -name ffmpeg -type f | head -1)"
+    X86_FF="$(find "$TEMP_DIR/x86_64" -name ffmpeg -type f | head -1)"
+    lipo -create "$ARM64_FF" "$X86_FF" -output "$FFMPEG_RESOURCE"
+    chmod +x "$FFMPEG_RESOURCE"
+    xattr -cr "$FFMPEG_RESOURCE" 2>/dev/null || true
+    codesign -f -s - "$FFMPEG_RESOURCE"
+    rm -rf "$TEMP_DIR"
+    echo "    ffmpeg: $(file "$FFMPEG_RESOURCE" | sed 's/.*: //')"
+fi
+
 echo "==> swift build -c release"
 xcrun swift build -c release --package-path "$MACOS_DIR/Desktop" -Xswiftc -emit-const-values
 
@@ -87,6 +108,11 @@ echo "==> Assembling $APP_BUNDLE"
 cp -f "$SWIFTPM_RELEASE_DIR/$BINARY_NAME" "$APP_BUNDLE/Contents/MacOS/$BINARY_NAME"
 chmod +x "$APP_BUNDLE/Contents/MacOS/$BINARY_NAME"
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_BUNDLE/Contents/MacOS/$BINARY_NAME" 2>/dev/null || true
+# Rewrite the host-local libwebp load path to @rpath (same as run.sh)
+WEBP_LOAD="$(otool -L "$APP_BUNDLE/Contents/MacOS/$BINARY_NAME" | awk '/libwebp\.7\.dylib/ {sub(/^[[:space:]]+/,""); sub(/ \(.*$/,""); print; exit}')"
+if [ -n "$WEBP_LOAD" ] && [ "$WEBP_LOAD" != "@rpath/libwebp.7.dylib" ]; then
+    install_name_tool -change "$WEBP_LOAD" "@rpath/libwebp.7.dylib" "$APP_BUNDLE/Contents/MacOS/$BINARY_NAME"
+fi
 
 "$SCRIPT_DIR/../scripts/embed-app-intents-metadata.sh" "$MACOS_DIR/Desktop" "$APP_BUNDLE" Release "$(uname -m)"
 
@@ -134,16 +160,24 @@ fi
 if [ -d "$SWIFTPM_RELEASE_DIR/onnxruntime.framework" ]; then
     cp -R "$SWIFTPM_RELEASE_DIR/onnxruntime.framework" "$APP_BUNDLE/Contents/Frameworks/"
 fi
-WEBP_LIB="$(pkg-config --variable=libdir libwebp 2>/dev/null)/libwebp.7.dylib"
-if [ -f "$WEBP_LIB" ]; then
-    cp -f "$WEBP_LIB" "$APP_BUNDLE/Contents/Frameworks/libwebp.7.dylib"
-    SHARPYUV_LIB="$(dirname "$WEBP_LIB")/libsharpyuv.0.dylib"
-    [ -f "$SHARPYUV_LIB" ] && cp -f "$SHARPYUV_LIB" "$APP_BUNDLE/Contents/Frameworks/libsharpyuv.0.dylib"
-    install_name_tool -id "@rpath/libwebp.7.dylib" "$APP_BUNDLE/Contents/Frameworks/libwebp.7.dylib" 2>/dev/null || true
-    if [ -f "$APP_BUNDLE/Contents/Frameworks/libsharpyuv.0.dylib" ]; then
-        install_name_tool -id "@rpath/libsharpyuv.0.dylib" "$APP_BUNDLE/Contents/Frameworks/libsharpyuv.0.dylib" 2>/dev/null || true
+# Vendored universal libwebp dylibs (repo, arch-independent of the build host)
+VENDOR_WEBP="$MACOS_DIR/vendor/libwebp"
+if [ -f "$VENDOR_WEBP/libwebp.7.dylib" ]; then
+    cp -f "$VENDOR_WEBP/libwebp.7.dylib" "$APP_BUNDLE/Contents/Frameworks/libwebp.7.dylib"
+    [ -f "$VENDOR_WEBP/libsharpyuv.0.dylib" ] && cp -f "$VENDOR_WEBP/libsharpyuv.0.dylib" "$APP_BUNDLE/Contents/Frameworks/libsharpyuv.0.dylib"
+else
+    # Fallback: Homebrew libwebp (host-arch only)
+    WEBP_LIB="$(pkg-config --variable=libdir libwebp 2>/dev/null)/libwebp.7.dylib"
+    if [ -f "$WEBP_LIB" ]; then
+        cp -f "$WEBP_LIB" "$APP_BUNDLE/Contents/Frameworks/libwebp.7.dylib"
+        SHARPYUV_LIB="$(dirname "$WEBP_LIB")/libsharpyuv.0.dylib"
+        [ -f "$SHARPYUV_LIB" ] && cp -f "$SHARPYUV_LIB" "$APP_BUNDLE/Contents/Frameworks/libsharpyuv.0.dylib"
     fi
 fi
+for dy in libwebp.7.dylib libsharpyuv.0.dylib; do
+    [ -f "$APP_BUNDLE/Contents/Frameworks/$dy" ] && \
+        install_name_tool -id "@rpath/$dy" "$APP_BUNDLE/Contents/Frameworks/$dy" 2>/dev/null || true
+done
 
 # Agent runtime
 AGENT_DIR="$MACOS_DIR/agent"
@@ -261,10 +295,12 @@ xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 echo "==> Bundle audit"
 "$SCRIPT_DIR/../scripts/audit-desktop-bundle-deps.sh" "$APP_BUNDLE" || echo "WARN: bundle dep audit reported issues (non-fatal for CI)"
 
-# ─── Zip artifact ───────────────────────────────────────────────────────────
+# ─── Zip artifact (exclude the .app to keep the artifact under the GitLab
+#     max-artifact-size limit; ship only the zip) ───────────────────────────
 if [ "${OMI_CI_SKIP_ZIP:-0}" != "1" ]; then
     echo "==> Creating zip"
     (cd "$DIST_DIR" && ditto -c -k --sequesterRsrc --keepParent "$APP_NAME.app" "$APP_NAME.zip")
+    rm -rf "$APP_BUNDLE"  # keep only the zip as artifact
 fi
 
 echo "==> Done. Artifacts in $DIST_DIR:"
