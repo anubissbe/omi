@@ -31,6 +31,10 @@ data:
   # STT/LLM: keys uit omi-secrets (Mistral via OPENAI_BASE_URL of eigen endpoint).
   OMI_LLM_GATEWAY_FEATURE_MODE: "off"
   SCREEN_FRAME_EGRESS_ENABLED: "false"
+  # STT chain: self-hosted Parakeet first, no Soniox (no key on selfhosted)
+  STT_SERVICE_MODELS: "parakeet,modulate-velma-2"
+  # Modulate needs a key too; without it selection skips it and falls to parakeet
+  # (or no-op when PINECONE/STT are unset). Set MODULATE_API_KEY in omi-secrets if used.
   # Storage: OMI_LOCAL_STORAGE_ROOT + base URL wijzen naar een PVC-mount voor
   # self-hosted file storage (geen GCS). Zie secrets.md voor de mount.
 ---
