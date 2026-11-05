@@ -16,6 +16,10 @@
 # Optional env:
 #   OMI_CI_APP_NAME         override app name (default: omi-ci-<branch-slug>)
 #   OMI_CI_SKIP_ZIP=1       skip the .zip step
+#   OMI_CI_PYTHON_API_URL   override OMI_PYTHON_API_URL baked into the bundle
+#   OMI_CI_DESKTOP_API_URL  override OMI_DESKTOP_API_URL baked into the bundle
+#   OMI_CI_AUTH_API_URL     override OMI_AUTH_API_URL baked into the bundle
+#   (defaults point at the self-hosted backend on euraika.dev)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -146,11 +150,18 @@ if [ -s "$MACOS_DIR/omi_icon.icns" ]; then
     cp -f "$MACOS_DIR/omi_icon.icns" "$APP_BUNDLE/Contents/Resources/OmiIcon.icns"
 fi
 
-# .env: point at the DEV serving plane (named bundles default to dev anyway,
-# but pin it explicitly so the bundle is self-contained)
+# .env: default to the self-hosted backend on euraika.dev (named bundles would
+# otherwise fall back to the dev serving plane; pin it so the bundle is
+# self-contained). CI can override via OMI_CI_*_API_URL variables.
+# Note: the desktop backend is routed under /desktop on the self-hosted ingress.
+PYTHON_API_URL="${OMI_CI_PYTHON_API_URL:-https://api.omi.euraika.dev}"
+DESKTOP_API_URL="${OMI_CI_DESKTOP_API_URL:-https://api.omi.euraika.dev/desktop}"
+AUTH_API_URL="${OMI_CI_AUTH_API_URL:-https://api.omi.euraika.dev}"
 cat > "$APP_BUNDLE/Contents/Resources/.env" <<EOF
-OMI_DESKTOP_API_URL=https://desktop-backend-dt5lrfkkoa-uc.a.run.app
-OMI_PYTHON_API_URL=https://api.omiapi.com
+OMI_ENV_STAGE=selfhosted
+OMI_PYTHON_API_URL=$PYTHON_API_URL
+OMI_DESKTOP_API_URL=$DESKTOP_API_URL
+OMI_AUTH_API_URL=$AUTH_API_URL
 EOF
 
 # Frameworks: Sparkle + onnxruntime + libwebp
