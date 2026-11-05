@@ -389,15 +389,15 @@ def test_stale_and_busy_wakes_are_consumed(rows, client):
 
 
 def test_new_rows_bind_to_the_enrichment_queue_only_when_routed(rows, monkeypatch):
-    assert reprocess._dispatch_binding()['handler'].endswith('/v2/sync-jobs/run')
+    assert reprocess.dispatch_binding()['handler'].endswith('/v2/sync-jobs/run')
     monkeypatch.setenv('ENRICHMENT_ROUTE', 'enrichment_queue')
     monkeypatch.setenv('ENRICHMENT_TASKS_QUEUE', 'enrichment')
     monkeypatch.setenv('ENRICHMENT_TASKS_HANDLER_URL', 'https://workers.invalid/v2/enrichment/run')
-    binding = reprocess._dispatch_binding()
+    binding = reprocess.dispatch_binding()
     assert binding['queue'] == 'enrichment' and binding['handler'].endswith('/v2/enrichment/run')
     assert reprocess.valid_dispatch_binding(binding)
     monkeypatch.delenv('ENRICHMENT_TASKS_QUEUE')
-    assert reprocess._dispatch_binding()['handler'].endswith('/v2/sync-jobs/run')  # incomplete: fall back, counted
+    assert reprocess.dispatch_binding()['handler'].endswith('/v2/sync-jobs/run')  # incomplete: fall back, counted
 
 
 @pytest.fixture
@@ -817,6 +817,28 @@ def test_transient_fault_in_the_empty_output_strike_releases_the_lease(rows, mon
     result = _deliver(rows, lambda *_: SimpleNamespace(structured={'title': 'Synthetic'}))
     assert (result.outcome, result.reason) == ('retry', 'dependency_warming')
     assert rows[0][KEY]['lease_until'] == 0 and rows[0][KEY]['task_token'] == token
+
+
+def test_empty_output_owner_race_defers_without_burning_callback_attempts(rows, monkeypatch):
+    import database._client as firestore_client
+    import database.summary_processing as summary_processing
+
+    monkeypatch.setenv('FIRST_SUMMARY_DEADLINE_ENABLED', 'true')
+    monkeypatch.setenv('FIRST_SUMMARY_DEADLINE_PERCENT', '100')
+    monkeypatch.setattr(firestore_client, 'get_firestore_client', Mock())
+    monkeypatch.setattr(
+        summary_processing,
+        'record_empty_failure',
+        Mock(return_value=summary_processing.EmptyFailureOutcome.OWNER_MISMATCH),
+    )
+    rows[0][KEY].update(summary_empty_failures=2)
+    token = rows[0][KEY]['task_token']
+    result = _deliver(rows, lambda *_: SimpleNamespace(structured={'title': 'Synthetic'}))
+    assert (result.outcome, result.reason) == ('deferred', 'not_due')
+    pending = rows[0][KEY]
+    assert pending['deferred_reason'] == 'summary_owner_changed'
+    assert pending['summary_empty_failures'] == 2
+    assert pending['task_token'] != token and pending['lease_until'] == 0
 
 
 def test_transient_fault_on_the_effects_only_path_releases_the_lease(rows, monkeypatch):
