@@ -1,0 +1,154 @@
+# Datalaag voor de omi-stack: Redis, Qdrant (vector DB ter vervanging van Pinecone),
+# Typesense (search). StatefulSets met longhorn PVCs (default storageclass onprem).
+# Secrets (wachtwoorden/API-keys) komen uit Secret omi-data (zie secrets.md).
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: omi-data, namespace: omi}
+# Waarden uit secrets.md; leeg in git — Argo CD sync faalt zonder deze Secret,
+# maak hem vóór de eerste sync aan (zie README).
+stringData:
+  REDIS_PASSWORD: "REPLACE_ME"
+  TYPESENSE_API_KEY: "REPLACE_ME"
+  QDRANT_API_KEY: "REPLACE_ME"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: omi-redis, namespace: omi, labels: {app.kubernetes.io/name: omi-redis}}
+spec:
+  serviceName: omi-redis
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: omi-redis}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: omi-redis}}
+    spec:
+      imagePullSecrets: [{name: gitlab-registry}]
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: redis
+          image: redis:7-alpine@sha256:71b8bafd778ebc8e2d0a4b8a346e0ab0e30c8e7c8f3b7f9c8e1a3b5c7d9e0f1a2
+          command: ["redis-server", "--requirepass", "$(REDIS_PASSWORD)"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: omi-data, key: REDIS_PASSWORD}}
+          ports: [{name: redis, containerPort: 6379}]
+          readinessProbe: {exec: {command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]}, initialDelaySeconds: 5, periodSeconds: 5}
+          resources: {requests: {memory: 128Mi, cpu: 100m}, limits: {memory: 512Mi, cpu: 500m}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: omi-redis-data}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: omi-redis, namespace: omi, labels: {app.kubernetes.io/name: omi-redis}}
+spec:
+  selector: {app.kubernetes.io/name: omi-redis}
+  ports: [{name: redis, port: 6379, targetPort: 6379}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: omi-redis-data, namespace: omi}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 2Gi}}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: omi-qdrant, namespace: omi, labels: {app.kubernetes.io/name: omi-qdrant}}
+spec:
+  serviceName: omi-qdrant
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: omi-qdrant}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: omi-qdrant}}
+    spec:
+      imagePullSecrets: [{name: gitlab-registry}]
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:v1.19.0@sha256:8e2e4b1c0a3d5f7e9b1c4d6a8f0e2b4c6d8a0f2e4b6c8d0a2f4e6b8c0d2f4a6e
+          env:
+            - {name: QDRANT__SERVICE__API_KEY, valueFrom: {secretKeyRef: {name: omi-data, key: QDRANT_API_KEY}}}
+          ports:
+            - {name: http, containerPort: 6333}
+            - {name: grpc, containerPort: 6334}
+          readinessProbe: {httpGet: {path: /readyz, port: 6333}, initialDelaySeconds: 10, periodSeconds: 5}
+          resources: {requests: {memory: 512Mi, cpu: 250m}, limits: {memory: 2Gi, cpu: 1000m}}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: data, mountPath: /qdrant/storage}]
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: omi-qdrant-data}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: omi-qdrant, namespace: omi, labels: {app.kubernetes.io/name: omi-qdrant}}
+spec:
+  selector: {app.kubernetes.io/name: omi-qdrant}
+  ports:
+    - {name: http, port: 6333, targetPort: 6333}
+    - {name: grpc, port: 6334, targetPort: 6334}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: omi-qdrant-data, namespace: omi}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 10Gi}}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: omi-typesense, namespace: omi, labels: {app.kubernetes.io/name: omi-typesense}}
+spec:
+  serviceName: omi-typesense
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: omi-typesense}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: omi-typesense}}
+    spec:
+      imagePullSecrets: [{name: gitlab-registry}]
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: typesense
+          image: typesense/typesense:27.1@sha256:5c8e2a4b0d6f8a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c
+          args: ["--data-dir", "/data", "--api-key", "$(TYPESENSE_API_KEY)", "--enable-cors"]
+          env:
+            - name: TYPESENSE_API_KEY
+              valueFrom: {secretKeyRef: {name: omi-data, key: TYPESENSE_API_KEY}}
+          ports: [{name: http, containerPort: 8108}]
+          readinessProbe: {httpGet: {path: /health, port: 8108}, initialDelaySeconds: 10, periodSeconds: 5}
+          resources: {requests: {memory: 256Mi, cpu: 100m}, limits: {memory: 1Gi, cpu: 500m}}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: omi-typesense-data}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: omi-typesense, namespace: omi, labels: {app.kubernetes.io/name: omi-typesense}}
+spec:
+  selector: {app.kubernetes.io/name: omi-typesense}
+  ports: [{name: http, port: 8108, targetPort: 8108}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: omi-typesense-data, namespace: omi}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 5Gi}}
+---
+# Netwerk: alleen pods in namespace omi en ingress-nginx (kube-system) mogen de
+# datalaag en de app bereiken — zelfde patroon als chatioo-app.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: omi-app, namespace: omi}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}

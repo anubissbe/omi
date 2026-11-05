@@ -1,29 +1,29 @@
-# GitLab CI for the Omi desktop app (macOS builds on demand).
+# GitLab CI for euraika/omi (git.euraika.net/euraika/omi).
 #
-# Usage: trigger the "build-macos" job from the Pipelines page
-#        (Run pipeline → or play the job) on the branch you want built,
-#        e.g. desktop/merge-upstream. Download the .app.zip from the job's
-#        Artifacts once it finishes.
+# Two concerns live here:
+#  1. build-macos  — on-demand macOS desktop build on the self-hosted Mac runner
+#                    (tags: macos, omi, xcode). Artifacts: omi-ci-<branch>.zip.
+#  2. build-backend-images — builds + pushes the three Python services
+#                    (backend, desktop-backend, pusher) to the GitLab container
+#                    registry (git.euraika.net:5050/euraika/omi/<svc>:<sha>),
+#                    consumed by the onprem Argo CD app gitops/onprem/apps/omi.
 #
-# Requires a macOS runner registered with tags: macos, omi, xcode
-# (self-hosted; Xcode + Homebrew webp/pkg-config preinstalled).
+# The backend image jobs run on the default Linux runners (no tags needed).
 
 stages:
   - build
+  - images
 
 .event_rules:
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api"'
+    - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "schedule"'
 
+# ───────────────────────── macOS desktop build ──────────────────────────────
 build-macos:
   stage: build
-  tags:
-    - macos
-    - omi
-    - xcode
+  tags: [macos, omi, xcode]
   timeout: 90m
   variables:
-    # Keep Homebrew tools visible to non-login shells
     HOMEBREW_NO_AUTO_UPDATE: "1"
     HOMEBREW_NO_INSTALL_CLEANUP: "1"
   script:
@@ -38,3 +38,47 @@ build-macos:
       - desktop/macos/build-dist/*.entitlements
   rules:
     - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "schedule"'
+
+# ─────────────────────── backend container images ───────────────────────────
+# Build contexts are the REPO ROOT (backend/Dockerfile COPYs .github/scripts/...).
+# PYTHON_BASE_IMAGE overrides the private gcr.io base with public python:3.11-slim.
+# Images land in git.euraika.net:5050/euraika/omi/{backend,desktop-backend,pusher}:<sha>.
+
+.docker_image_job:
+  stage: images
+  image: docker:27-cli
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    PYTHON_BASE_IMAGE: python:3.11-slim
+    IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - docker build --platform linux/amd64 -f "backend/$DOCKERFILE" --build-arg PYTHON_BASE_IMAGE=$PYTHON_BASE_IMAGE -t "$CI_REGISTRY_IMAGE/$IMAGE_NAME:$IMAGE_TAG" .
+    - docker push "$CI_REGISTRY_IMAGE/$IMAGE_NAME:$IMAGE_TAG"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "schedule"'
+      changes:
+        - backend/**
+        - .gitlab-ci.yml
+
+build-image-backend:
+  extends: .docker_image_job
+  variables:
+    DOCKERFILE: Dockerfile
+    IMAGE_NAME: backend
+
+build-image-desktop-backend:
+  extends: .docker_image_job
+  variables:
+    DOCKERFILE: Dockerfile.desktop_backend
+    IMAGE_NAME: desktop-backend
+
+build-image-pusher:
+  extends: .docker_image_job
+  variables:
+    DOCKERFILE: pusher/Dockerfile
+    IMAGE_NAME: pusher

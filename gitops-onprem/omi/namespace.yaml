@@ -1,0 +1,14 @@
+# Namespace omi op cluster onprem. Delete=false/Prune=false: de Application weghalen
+# verwijdert nooit de namespace of data. Pull-secret gitlab-registry wordt door de
+# onprem-token-rotator in deze namespace neergezet (targets-registry.json).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: omi
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+    argocd.argoproj.io/sync-wave: "-2"
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
