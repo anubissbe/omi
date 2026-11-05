@@ -1,0 +1,39 @@
+# GitLab CI for the Omi desktop app (macOS builds on demand).
+#
+# Usage: trigger the "build-macos" job from the Pipelines page
+#        (Run pipeline → or play the job) on the branch you want built,
+#        e.g. desktop/merge-upstream. Download the .app.zip from the job's
+#        Artifacts once it finishes.
+#
+# Requires a macOS runner registered with tags: macos, omi, xcode
+# (self-hosted; Xcode + Homebrew webp/pkg-config preinstalled).
+
+stages:
+  - build
+
+.event_rules:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api"'
+
+build-macos:
+  stage: build
+  tags:
+    - macos
+    - omi
+    - xcode
+  timeout: 90m
+  variables:
+    # Keep Homebrew tools visible to non-login shells
+    HOMEBREW_NO_AUTO_UPDATE: "1"
+    HOMEBREW_NO_INSTALL_CLEANUP: "1"
+  script:
+    - echo "Building branch $CI_COMMIT_REF_NAME at $CI_COMMIT_SHORT_SHA"
+    - chmod +x desktop/macos/ci/gitlab-build.sh
+    - desktop/macos/ci/gitlab-build.sh
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - desktop/macos/build-dist/
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "schedule"'
