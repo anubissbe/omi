@@ -171,36 +171,51 @@ xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 CI_SIGN_KEYCHAIN="$HOME/Library/Keychains/omi-ci-signing.keychain-db"
 CI_SIGN_IDENTITY="Omi CI Local Signing"
 ensure_ci_signing_identity() {
-    if security find-certificate -c "$CI_SIGN_IDENTITY" "$CI_SIGN_KEYCHAIN" >/dev/null 2>&1; then
+    local probe
+    probe="$(mktemp)"
+    if codesign --force --sign "$CI_SIGN_IDENTITY" "$probe" >/dev/null 2>&1; then
+        rm -f "$probe"
         return 0
     fi
+    rm -f "$probe"
     local work
     work="$(mktemp -d)"
-    cat > "$work/ci-sign.cnf" <<'CNF'
-[ req ]
+    # codeSigning EKU (critical) + CA:false are required, or codesign declines the identity.
+    cat > "$work/openssl.cnf" <<CNF
+[req]
 distinguished_name = dn
-x509_extensions = ext
+x509_extensions = v3
 prompt = no
-[ dn ]
-CN = Omi CI Local Signing
-O = Omi CI
-[ ext ]
-basicConstraints = critical,CA:FALSE
+[dn]
+CN = $CI_SIGN_IDENTITY
+[v3]
+basicConstraints = critical,CA:false
 keyUsage = critical,digitalSignature
-extendedKeyUsage = codeSigning
+extendedKeyUsage = critical,codeSigning
 CNF
+    /usr/bin/openssl req -x509 -newkey rsa:2048 -keyout "$work/key.pem" -out "$work/cert.pem" \
+        -days 3650 -nodes -config "$work/openssl.cnf" >/dev/null 2>&1
+    /usr/bin/openssl pkcs12 -export -inkey "$work/key.pem" -in "$work/cert.pem" \
+        -out "$work/identity.p12" -passout "pass:omi-ci" -name "$CI_SIGN_IDENTITY" \
+        -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 >/dev/null 2>&1
     security delete-keychain "$CI_SIGN_KEYCHAIN" 2>/dev/null || true
-    security create-keychain -p "omi-ci" "$CI_SIGN_KEYCHAIN"
-    security set-keychain-settings -t 3600 -l "$CI_SIGN_KEYCHAIN"
-    security unlock-keychain -p "omi-ci" "$CI_SIGN_KEYCHAIN"
+    security create-keychain -p "omi-ci" "$CI_SIGN_KEYCHAIN" 2>/dev/null || true
+    # No idle timeout, no lock-on-sleep: a relocking keychain reintroduces the interactive prompt.
+    security set-keychain-settings "$CI_SIGN_KEYCHAIN" 2>/dev/null || true
+    security unlock-keychain -p "omi-ci" "$CI_SIGN_KEYCHAIN" 2>/dev/null || true
+    security import "$work/identity.p12" -k "$CI_SIGN_KEYCHAIN" \
+        -P "omi-ci" -T /usr/bin/codesign -T /usr/bin/security >/dev/null 2>&1
     security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "omi-ci" "$CI_SIGN_KEYCHAIN" 2>/dev/null || true
-    openssl req -new -x509 -keyout "$work/key.pem" -out "$work/cert.pem" \
-        -days 3650 -config "$work/ci-sign.cnf" -nodes 2>/dev/null
-    security import "$work/cert.pem" -k "$CI_SIGN_KEYCHAIN" -T /usr/bin/codesign -T /usr/bin/security -P "" 2>/dev/null || \
-        security import "$work/cert.pem" -k "$CI_SIGN_KEYCHAIN" -T /usr/bin/codesign -T /usr/bin/security 2>/dev/null
-    security import "$work/key.pem" -k "$CI_SIGN_KEYCHAIN" -T /usr/bin/codesign -T /usr/bin/security -P "" 2>/dev/null || \
-        security import "$work/key.pem" -k "$CI_SIGN_KEYCHAIN" -T /usr/bin/codesign -T /usr/bin/security 2>/dev/null
+    # Make the keychain visible to codesign without disturbing the user's search list.
+    security list-keychains -d user -s "$CI_SIGN_KEYCHAIN" "$(security list-keychains -d user | tr -d '"')" >/dev/null 2>&1 || true
     rm -rf "$work"
+    probe="$(mktemp)"
+    if ! codesign --force --sign "$CI_SIGN_IDENTITY" "$probe" >/dev/null 2>&1; then
+        echo "ERROR: CI signing identity '$CI_SIGN_IDENTITY' not usable after creation" >&2
+        rm -f "$probe"
+        return 1
+    fi
+    rm -f "$probe"
 }
 ensure_ci_signing_identity
 
