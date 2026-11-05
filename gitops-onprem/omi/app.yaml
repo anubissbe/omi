@@ -47,7 +47,7 @@ spec:
       securityContext: {seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: backend
-          image: git.euraika.net:5050/euraika/omi/backend:4444bd77bb
+          image: git.euraika.net:5050/euraika/omi/backend:9b5fe93e
           ports: [{name: http, containerPort: 8080}]
           envFrom:
             - {configMapRef: {name: omi-env}}
@@ -77,7 +77,7 @@ spec:
       securityContext: {seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: desktop-backend
-          image: git.euraika.net:5050/euraika/omi/desktop-backend:4444bd77bb
+          image: git.euraika.net:5050/euraika/omi/desktop-backend:9b5fe93e
           ports: [{name: http, containerPort: 8080}]
           envFrom:
             - {configMapRef: {name: omi-env}}
@@ -108,7 +108,7 @@ spec:
       securityContext: {seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: pusher
-          image: git.euraika.net:5050/euraika/omi/pusher:4444bd77bb
+          image: git.euraika.net:5050/euraika/omi/pusher:9b5fe93e
           ports: [{name: http, containerPort: 8080}]
           envFrom:
             - {configMapRef: {name: omi-env}}
