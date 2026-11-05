@@ -11,8 +11,8 @@
 # The backend image jobs run on the default Linux runners (no tags needed).
 
 stages:
-  - build
   - images
+  - build
 
 .event_rules:
   rules:
