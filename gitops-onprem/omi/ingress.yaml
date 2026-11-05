@@ -25,6 +25,9 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
     nginx.ingress.kubernetes.io/upstream-hash-by: "$request_uri"
+    # strip /desktop and /pusher prefixes before proxying
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
     cert-manager.io/issuer: omi-letsencrypt
 spec:
   ingressClassName: nginx
@@ -35,6 +38,7 @@ spec:
     - host: api.omi.euraika.dev
       http:
         paths:
-          - {path: /desktop, pathType: Prefix, backend: {service: {name: omi-desktop-backend, port: {name: http}}}}
-          - {path: /pusher, pathType: Prefix, backend: {service: {name: omi-pusher, port: {name: http}}}}
+          # strip the prefix so backends see their native paths
+          - {path: /desktop(/|$)(.*), pathType: ImplementationSpecific, backend: {service: {name: omi-desktop-backend, port: {name: http}}}}
+          - {path: /pusher(/|$)(.*), pathType: ImplementationSpecific, backend: {service: {name: omi-pusher, port: {name: http}}}}
           - {path: /, pathType: Prefix, backend: {service: {name: omi-backend, port: {name: http}}}}
