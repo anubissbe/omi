@@ -26,7 +26,7 @@ spec:
       securityContext: {seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: redis
-          image: redis:7-alpine@sha256:71b8bafd778ebc8e2d0a4b8a346e0ab0e30c8e7c8f3b7f9c8e1a3b5c7d9e0f1a2
+          image: redis:7-alpine
           command: ["redis-server", "--requirepass", "$(REDIS_PASSWORD)"]
           env:
             - name: REDIS_PASSWORD
@@ -68,7 +68,7 @@ spec:
       securityContext: {seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: qdrant
-          image: qdrant/qdrant:v1.19.0@sha256:8e2e4b1c0a3d5f7e9b1c4d6a8f0e2b4c6d8a0f2e4b6c8d0a2f4e6b8c0d2f4a6e
+          image: qdrant/qdrant:v1.19.0
           env:
             - {name: QDRANT__SERVICE__API_KEY, valueFrom: {secretKeyRef: {name: omi-data, key: QDRANT_API_KEY}}}
           ports:
@@ -112,7 +112,7 @@ spec:
       securityContext: {seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: typesense
-          image: typesense/typesense:27.1@sha256:5c8e2a4b0d6f8a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c
+          image: typesense/typesense:27.1
           args: ["--data-dir", "/data", "--api-key", "$(TYPESENSE_API_KEY)", "--enable-cors"]
           env:
             - name: TYPESENSE_API_KEY
