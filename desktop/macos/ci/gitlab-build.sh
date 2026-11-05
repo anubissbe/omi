@@ -49,12 +49,12 @@ pkg-config --exists libwebp || { echo "ERROR: libwebp not found (brew install we
 
 # ─── Agent runtime (npm deps + dist + universal node) ──────────────────────
 echo "==> Preparing agent runtime"
-./scripts/prepare-agent-runtime.sh --universal-node
+"$SCRIPT_DIR/../scripts/prepare-agent-runtime.sh" --universal-node
 
 # ─── Tool surfaces ──────────────────────────────────────────────────────────
 NODE_BIN=""
 for candidate in \
-    "Desktop/Sources/Resources/node" \
+    "$MACOS_DIR/Desktop/Sources/Resources/node" \
     "$(command -v node 2>/dev/null || true)" \
     "/opt/homebrew/opt/node@22/bin/node"; do
     if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" --experimental-strip-types -e '0' >/dev/null 2>&1; then
@@ -63,16 +63,16 @@ for candidate in \
     fi
 done
 [ -n "$NODE_BIN" ] || { echo "ERROR: Node 22.6+ required for tool surface generation"; exit 1; }
-(cd agent && "$NODE_BIN" --experimental-strip-types scripts/generate-tool-surfaces.mjs)
+(cd "$MACOS_DIR/agent" && "$NODE_BIN" --experimental-strip-types scripts/generate-tool-surfaces.mjs)
 
 # pi-mono-extension npm deps
-(cd pi-mono-extension && npm ci --no-fund --no-audit)
+(cd "$MACOS_DIR/pi-mono-extension" && npm ci --no-fund --no-audit)
 
 # ─── Swift release build ────────────────────────────────────────────────────
 echo "==> swift build -c release"
-xcrun swift build -c release --package-path Desktop -Xswiftc -emit-const-values
+xcrun swift build -c release --package-path "$MACOS_DIR/Desktop" -Xswiftc -emit-const-values
 
-SWIFTPM_RELEASE_DIR="Desktop/.build/release"
+SWIFTPM_RELEASE_DIR="$MACOS_DIR/Desktop/.build/release"
 [ -f "$SWIFTPM_RELEASE_DIR/$BINARY_NAME" ] || { echo "ERROR: release binary missing at $SWIFTPM_RELEASE_DIR/$BINARY_NAME"; exit 1; }
 
 # ─── Assemble bundle ────────────────────────────────────────────────────────
@@ -88,10 +88,10 @@ cp -f "$SWIFTPM_RELEASE_DIR/$BINARY_NAME" "$APP_BUNDLE/Contents/MacOS/$BINARY_NA
 chmod +x "$APP_BUNDLE/Contents/MacOS/$BINARY_NAME"
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_BUNDLE/Contents/MacOS/$BINARY_NAME" 2>/dev/null || true
 
-./scripts/embed-app-intents-metadata.sh Desktop "$APP_BUNDLE" Release "$(uname -m)"
+"$SCRIPT_DIR/../scripts/embed-app-intents-metadata.sh" "$MACOS_DIR/Desktop" "$APP_BUNDLE" Release "$(uname -m)"
 
 # Info.plist with our identity
-cp -f Desktop/Info.plist "$APP_BUNDLE/Contents/Info.plist"
+cp -f "$MACOS_DIR/Desktop/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $BINARY_NAME" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" "$APP_BUNDLE/Contents/Info.plist"
@@ -102,10 +102,10 @@ cp -f Desktop/Info.plist "$APP_BUNDLE/Contents/Info.plist"
 echo -n "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
 
 # Firebase config: dev variant (same based-hardware project, dev bundle id stamped in)
-if [ -f "Desktop/Sources/GoogleService-Info-Dev.plist" ]; then
-    cp -f Desktop/Sources/GoogleService-Info-Dev.plist "$APP_BUNDLE/Contents/Resources/GoogleService-Info.plist"
+if [ -f "$MACOS_DIR/Desktop/Sources/GoogleService-Info-Dev.plist" ]; then
+    cp -f "$MACOS_DIR/Desktop/Sources/GoogleService-Info-Dev.plist" "$APP_BUNDLE/Contents/Resources/GoogleService-Info.plist"
 else
-    cp -f Desktop/Sources/GoogleService-Info.plist "$APP_BUNDLE/Contents/Resources/GoogleService-Info.plist"
+    cp -f "$MACOS_DIR/Desktop/Sources/GoogleService-Info.plist" "$APP_BUNDLE/Contents/Resources/GoogleService-Info.plist"
 fi
 /usr/libexec/PlistBuddy -c "Set :BUNDLE_ID $BUNDLE_ID" "$APP_BUNDLE/Contents/Resources/GoogleService-Info.plist" 2>/dev/null || true
 
@@ -116,8 +116,8 @@ if [ -d "$RESOURCE_BUNDLE" ]; then
 fi
 
 # App icon
-if [ -s omi_icon.icns ]; then
-    cp -f omi_icon.icns "$APP_BUNDLE/Contents/Resources/OmiIcon.icns"
+if [ -s "$MACOS_DIR/omi_icon.icns" ]; then
+    cp -f "$MACOS_DIR/omi_icon.icns" "$APP_BUNDLE/Contents/Resources/OmiIcon.icns"
 fi
 
 # .env: point at the DEV serving plane (named bundles default to dev anyway,
@@ -163,7 +163,7 @@ if [ -d "$PI_MONO/node_modules" ]; then
 fi
 
 # ─── Normalize + sign ───────────────────────────────────────────────────────
-./scripts/prepare-desktop-bundle-native-deps.sh "$APP_BUNDLE"
+"$SCRIPT_DIR/../scripts/prepare-desktop-bundle-native-deps.sh" "$APP_BUNDLE"
 chmod -R u+w "$APP_BUNDLE"
 xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 
@@ -233,7 +233,7 @@ for dy in libwebp.7.dylib libsharpyuv.0.dylib; do
 done
 NODE_BUNDLED="$APP_BUNDLE/Contents/Resources/Omi Computer_Omi Computer.bundle/Contents/Resources/node"
 if [ -f "$NODE_BUNDLED" ]; then
-    codesign --force --options runtime --entitlements Desktop/Node.entitlements --sign "$CI_SIGN_IDENTITY" "$NODE_BUNDLED"
+    codesign --force --options runtime --entitlements "$MACOS_DIR/Desktop/Node.entitlements" --sign "$CI_SIGN_IDENTITY" "$NODE_BUNDLED"
 fi
 
 echo "==> Signing app bundle (self-signed: $CI_SIGN_IDENTITY)"
@@ -244,7 +244,7 @@ chmod -R u+w "$APP_BUNDLE"
 xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 
 echo "==> Bundle audit"
-./scripts/audit-desktop-bundle-deps.sh "$APP_BUNDLE" || echo "WARN: bundle dep audit reported issues (non-fatal for CI)"
+"$SCRIPT_DIR/../scripts/audit-desktop-bundle-deps.sh" "$APP_BUNDLE" || echo "WARN: bundle dep audit reported issues (non-fatal for CI)"
 
 # ─── Zip artifact ───────────────────────────────────────────────────────────
 if [ "${OMI_CI_SKIP_ZIP:-0}" != "1" ]; then
