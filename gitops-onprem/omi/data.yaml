@@ -167,15 +167,25 @@ spec:
     metadata: {labels: {app.kubernetes.io/name: omi-firebase-emulator}}
     spec:
       imagePullSecrets: [{name: gitlab-registry}]
-      securityContext: {seccompProfile: {type: RuntimeDefault}, runAsNonRoot: true, runAsUser: 1000}
+      securityContext: {seccompProfile: {type: RuntimeDefault}, runAsNonRoot: true, runAsUser: 1000, fsGroup: 1000}
+      # give the export-on-exit trap time to flush before the pod is killed
+      terminationGracePeriodSeconds: 60
       containers:
         - name: emulator
           image: andreysenov/firebase-tools:13.35.1
-          # --export-on-exit/--import: Firestore+Auth data persists across pod
-          # restarts on the omi-emulator-data PVC (export dir /emulator-data).
-          command: ["sh", "-c", "printf '{\"emulators\":{\"auth\":{\"host\":\"0.0.0.0\",\"port\":9099},\"firestore\":{\"host\":\"0.0.0.0\",\"port\":8080},\"ui\":{\"host\":\"0.0.0.0\",\"port\":4000},\"hub\":{\"host\":\"0.0.0.0\",\"port\":4400}}} ' > /tmp/firebase.json && exec firebase emulators:start --config /tmp/firebase.json --only auth,firestore --project demo-omi-local --export-on-exit /emulator-data --import /emulator-data"]
+          # --export-on-exit is unreliable under `kubectl delete` (the sh
+          # wrapper is killed before firebase-tools flushes, and it rmdir()s
+          # the target dir which fails on the PVC root), so export via the
+          # Emulator Hub admin API (POST /_admin/export, body {path,
+          # initiatedBy}) into /emulator-data/export. The busy-flag serializes
+          # exports so a slow export at large data sizes never stacks up.
+          # --import /emulator-data/export reloads at startup; data lives on
+          # the omi-emulator-data PVC.
+          command: ["sh", "-c", "mkdir -p /emulator-data/export && printf '{\"emulators\":{\"auth\":{\"host\":\"0.0.0.0\",\"port\":9099},\"firestore\":{\"host\":\"0.0.0.0\",\"port\":8080},\"ui\":{\"host\":\"0.0.0.0\",\"port\":4000},\"hub\":{\"host\":\"0.0.0.0\",\"port\":4400}}} ' > /tmp/firebase.json && firebase emulators:start --config /tmp/firebase.json --only auth,firestore --project demo-omi-local --import /emulator-data/export & EMU=$!; export_to() { [ -f /tmp/export-busy ] && return 0; touch /tmp/export-busy; node -e \"const b=JSON.stringify({path:'/emulator-data/export',initiatedBy:'omi-pvc'});require('http').request({host:'127.0.0.1',port:4400,path:'/_admin/export',method:'POST',headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(b)}},r=>r.resume()).on('error',()=>{}).end(b)\" 2>/dev/null; rm -f /tmp/export-busy; }; (while kill -0 $EMU 2>/dev/null; do export_to; sleep 60; done) & EXP=$!; trap 'kill -TERM $EMU' TERM INT; wait $EMU; kill $EXP 2>/dev/null; export_to; sleep 5"]
           env:
             - {name: FIREBASE_TOKEN, value: ""}  # emulator-only, geen login nodig
+            # Firestore emulator = JVM: cap heap at 6g so it can't eat the whole 8Gi limit
+            - {name: JAVA_TOOL_OPTIONS, value: "-Xmx6g"}
             # update-check/config-store faalt zonder write access op $HOME
             - {name: FIREBASE_CLI_NO_UPDATE_NOTIFIER, value: "true"}
             - {name: XDG_CONFIG_HOME, value: "/tmp/config"}
@@ -186,9 +196,14 @@ spec:
             - {name: ui, containerPort: 4000}
           readinessProbe: {tcpSocket: {port: 8080}, initialDelaySeconds: 20, periodSeconds: 10}
           livenessProbe: {tcpSocket: {port: 9099}, initialDelaySeconds: 40, periodSeconds: 20}
-          resources: {requests: {memory: 512Mi, cpu: 250m}, limits: {memory: 2Gi, cpu: 1000m}}
+          # Firestore emulator keeps the whole DB in JVM heap: OOMKilled at
+          # 2Gi with a few thousand docs. 8Gi headroom + explicit max heap.
+          resources: {requests: {memory: 1Gi, cpu: 250m}, limits: {memory: 8Gi, cpu: 2000m}}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: false}
           volumeMounts:
+            # GEEN subPath: firebase-tools' export doet rmdir('/emulator-data')
+            # wat faalt op een subPath-mount (EACCES). De hele PVC is van
+            # fsGroup 1000 (drwxrwsr-x root node), dus direct mounten mag.
             - {name: data, mountPath: /emulator-data}
             - {name: home, mountPath: /home/node}
             - {name: tmp, mountPath: /tmp}
@@ -212,12 +227,15 @@ spec:
     - {name: ui, port: 4000, targetPort: 4000}
 ---
 # Persistente data voor de Firebase emulator (Firestore+Auth export/import).
+# Firestore export is roughly 2-3x de ruwe doc-grootte (JSON + metadata), dus
+# 50Gi dekt ~15-20M docs van 1KB; bij meer: PVC vergroten (longhorn staat
+# volume expansion toe).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata: {name: omi-emulator-data, namespace: omi}
 spec:
   accessModes: [ReadWriteOnce]
-  resources: {requests: {storage: 10Gi}}
+  resources: {requests: {storage: 50Gi}}
 ---
 # PVC voor self-hosted object storage (vervangt GCS): omi-backend mount dit
 # als /omi-state; public URLs via OMI_LOCAL_STORAGE_BASE_URL -> /_local/storage.
