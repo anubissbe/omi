@@ -35,8 +35,20 @@ data:
   STT_SERVICE_MODELS: "parakeet,modulate-velma-2"
   # Modulate needs a key too; without it selection skips it and falls to parakeet
   # (or no-op when PINECONE/STT are unset). Set MODULATE_API_KEY in omi-secrets if used.
-  # Storage: OMI_LOCAL_STORAGE_ROOT + base URL wijzen naar een PVC-mount voor
-  # self-hosted file storage (geen GCS). Zie secrets.md voor de mount.
+  # ── Self-hosted Google-vervangers (geen ADC op onprem) ──
+  # Firestore + Auth emulator in de namespace (omi-firebase-emulator).
+  FIRESTORE_EMULATOR_HOST: "omi-firebase-emulator:8080"
+  FIREBASE_AUTH_EMULATOR_HOST: "omi-firebase-emulator:9099"
+  FIREBASE_PROJECT_ID: "demo-omi-local"
+  FIREBASE_AUTH_PROJECT_ID: "demo-omi-local"
+  # Lokale file storage i.p.v. GCS: root is een PVC-mount; public URLs worden
+  # door de backend zelf geserveerd via /_local/storage (zie main.py).
+  OMI_HARNESS_STATE_ROOT: "/omi-state"
+  OMI_LOCAL_STORAGE_ROOT: "/omi-state/storage"
+  OMI_LOCAL_STORAGE_BASE_URL: "https://api.omi.euraika.dev/_local/storage"
+  # ADC/GCE-probing uitschakelen zodat er geen DefaultCredentialsError-warnings
+  # meer komen uit de lazy GCS/Firestore clients.
+  GOOGLE_AUTH_DISABLE_GCE_CHECK: "true"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -60,6 +72,10 @@ spec:
           livenessProbe: {httpGet: {path: /v1/health, port: 8080}, initialDelaySeconds: 30, periodSeconds: 20}
           resources: {requests: {memory: 512Mi, cpu: 250m}, limits: {memory: 2Gi, cpu: 1000m}}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: storage, mountPath: /omi-state}]
+      volumes:
+        - name: storage
+          persistentVolumeClaim: {claimName: omi-storage-data}
 ---
 apiVersion: v1
 kind: Service

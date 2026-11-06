@@ -41,4 +41,6 @@ spec:
           # strip the prefix so backends see their native paths
           - {path: /desktop(/|$)(.*), pathType: ImplementationSpecific, backend: {service: {name: omi-desktop-backend, port: {name: http}}}}
           - {path: /pusher(/|$)(.*), pathType: ImplementationSpecific, backend: {service: {name: omi-pusher, port: {name: http}}}}
+          # local storage public URLs (OMI_LOCAL_STORAGE_BASE_URL); long prefix wins over /
+          - {path: /_local(/|$)(.*), pathType: ImplementationSpecific, backend: {service: {name: omi-backend, port: {name: http}}}}
           - {path: /, pathType: Prefix, backend: {service: {name: omi-backend, port: {name: http}}}}

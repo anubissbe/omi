@@ -43,17 +43,28 @@ umask 077; f=$(mktemp)
   # STT: eigen Deepgram-compatibele endpoint of hosted key
   # echo "DEEPGRAM_SELF_HOSTED_URL=http://omi-stt:8080"
   # echo "DEEPGRAM_API_KEY=<key>"
-  # Auth/Firestore: óf eigen Firebase project (SA JSON), óf emulators:
-  # echo "FIRESTORE_EMULATOR_HOST=firestore.omi.svc:8081"
-  # echo "FIREBASE_AUTH_EMULATOR_HOST=auth.omi.svc:9099"
-  # echo "FIREBASE_PROJECT_ID=omi-euraika"
+  # Auth/Firestore: op onprem via de Firebase emulator-suite in de namespace
+  # (omi-firebase-emulator, project demo-omi-local) — deze staan in omi-env.
+  # Eigen Firebase project (SA JSON) kan als alternatief:
   # echo "SERVICE_ACCOUNT_JSON=<json, één regel>"
 } > "$f"
 kubectl --context onprem -n omi create secret generic omi-secrets --from-env-file="$f"
 rm -f "$f"
 ```
 
-## 4. cert-manager ACME account
+## 4. Firebase emulator (selfhosted, geen Google Cloud nodig)
+
+De emulator-suite draait als StatefulSet `omi-firebase-emulator` in namespace `omi`
+(Auth 9099, Firestore 8080, project `demo-omi-local`). De env-variabelen
+`FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`, `FIREBASE_PROJECT_ID`
+staan in ConfigMap `omi-env` (app.yaml). Lokale sign-in voor dev/test:
+
+```sh
+curl -X POST https://api.omi.euraika.dev/v1/auth/local-dev/custom-token \
+  -d "uid=bert" -d "email=bert@euraika.net"
+```
+
+## 5. cert-manager ACME account
 
 ```sh
 umask 077; f=$(mktemp)
