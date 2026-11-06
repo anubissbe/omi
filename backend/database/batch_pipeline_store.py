@@ -229,10 +229,11 @@ class FirestoreTransaction:
 class FirestoreStore:
     def __init__(self, namespace: str, *, firestore_client: Any = None):
         # Require a stage-qualified name; never infer dev from the customer project.
-        if namespace not in {'batch_pipeline_prod', 'batch_pipeline_dev'} and not re.fullmatch(
+        # selfhosted uses batch_pipeline_selfhosted with the onprem Postgres jobstore.
+        if namespace not in {'batch_pipeline_prod', 'batch_pipeline_dev', 'batch_pipeline_selfhosted'} and not re.fullmatch(
             r'batch_pipeline_test_[a-z0-9_]{1,40}', namespace
         ):
-            raise ValueError('explicit batch_pipeline_{prod,dev,test_<id>} namespace required')
+            raise ValueError('explicit batch_pipeline_{prod,dev,selfhosted,test_<id>} namespace required')
         self.namespace = namespace
         self._client = firestore_client
         self._require_stage()
@@ -246,7 +247,7 @@ class FirestoreStore:
                 raise RuntimeError('injected test client must be bound to the loopback emulator')
         else:
             stage = os.getenv('OMI_ENV_STAGE', '').strip().lower()
-            if stage not in {'prod', 'dev'} or self.namespace != f'batch_pipeline_{stage}':
+            if stage not in {'prod', 'dev', 'selfhosted'} or self.namespace != f'batch_pipeline_{stage}':
                 raise RuntimeError('batch namespace must match explicit runtime stage')
 
     @property

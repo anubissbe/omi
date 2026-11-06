@@ -22,7 +22,7 @@ from dotenv import dotenv_values, load_dotenv
 
 logger = logging.getLogger(__name__)
 
-VALID_STAGES = frozenset({"prod", "dev", "local", "offline"})
+VALID_STAGES = frozenset({"prod", "dev", "local", "offline", "selfhosted"})
 
 # ``local`` uses the existing harness filename for backward compatibility.
 STAGE_ENV_FILENAMES: dict[str, str] = {
@@ -43,6 +43,7 @@ class EnvStage(str, Enum):
     DEV = "dev"
     LOCAL = "local"
     OFFLINE = "offline"
+    SELFHOSTED = "selfhosted"
 
 
 def backend_dir() -> Path:

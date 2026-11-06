@@ -12,7 +12,7 @@ from database import batch_pipeline_privacy_queries as queries
 from database.batch_pipeline_privacy import advance_privacy_generation, finish_privacy_purge, privacy_owner_key
 from database.batch_pipeline_shadow_hook import mirror_refresh, purge_owner as purge_jobstore_owner
 
-NAMESPACES = ('batch_pipeline_prod', 'batch_pipeline_dev')
+NAMESPACES = ('batch_pipeline_prod', 'batch_pipeline_dev', 'batch_pipeline_selfhosted')
 PAGE_SIZE = 100
 
 
