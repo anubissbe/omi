@@ -36,18 +36,29 @@ data:
   # Modulate needs a key too; without it selection skips it and falls to parakeet
   # (or no-op when PINECONE/STT are unset). Set MODULATE_API_KEY in omi-secrets if used.
   # ── Self-hosted Google-vervangers (geen ADC op onprem) ──
-  # Firestore + Auth emulator in de namespace (omi-firebase-emulator).
-  FIRESTORE_EMULATOR_HOST: "omi-firebase-emulator:8080"
+  # Auth emulator in de namespace (omi-firebase-emulator, ALLEEN auth; Firestore
+  # zit in Postgres — zie omi-db Cluster in data.yaml).
   FIREBASE_AUTH_EMULATOR_HOST: "omi-firebase-emulator:9099"
   FIREBASE_PROJECT_ID: "demo-omi-local"
   FIREBASE_AUTH_PROJECT_ID: "demo-omi-local"
+  # ── Postgres job store (workstream A): BATCH_JOBSTORE_MODE=shadow spiegelt
+  #    de batch jobstore naar Postgres; DSN komt uit CNPG-secret omi-db-app.
+  #    OMI_ENV_STAGE=selfhosted is geen 'prod', dus de staging-fence laat de
+  #    shadow toe op elke namespace behalve batch_pipeline_prod.
+  BATCH_JOBSTORE_MODE: "shadow"
+  JOBSTORE_PG_HOST: "omi-db-rw"
+  JOBSTORE_PG_DATABASE: "omi"
+  JOBSTORE_PG_USER: "omi"
   # Lokale file storage i.p.v. GCS: root is een PVC-mount; public URLs worden
   # door de backend zelf geserveerd via /_local/storage (zie main.py).
+  # Zonder FIRESTORE_EMULATOR_HOST (Firestore zit in Postgres) moet de
+  # selfhosted-gate expliciet open: OMI_LOCAL_STORAGE_ALLOW_SELFHOSTED=1.
   OMI_HARNESS_STATE_ROOT: "/omi-state"
   OMI_LOCAL_STORAGE_ROOT: "/omi-state/storage"
   OMI_LOCAL_STORAGE_BASE_URL: "https://api.omi.euraika.dev/_local/storage"
+  OMI_LOCAL_STORAGE_ALLOW_SELFHOSTED: "1"
   # ADC/GCE-probing uitschakelen zodat er geen DefaultCredentialsError-warnings
-  # meer komen uit de lazy GCS/Firestore clients.
+  # meer komen uit de lazy GCS clients.
   GOOGLE_AUTH_DISABLE_GCE_CHECK: "true"
 ---
 apiVersion: apps/v1
@@ -68,6 +79,9 @@ spec:
           envFrom:
             - {configMapRef: {name: omi-env}}
             - {secretRef: {name: omi-secrets}}
+          env:
+            # CNPG app-secret key `uri` -> JOBSTORE_PG_DSN (DSN wint boven de IAM-triple)
+            - {name: JOBSTORE_PG_DSN, valueFrom: {secretKeyRef: {name: omi-db-app, key: uri}}}
           readinessProbe: {httpGet: {path: /v1/health, port: 8080}, initialDelaySeconds: 15, periodSeconds: 10}
           livenessProbe: {httpGet: {path: /v1/health, port: 8080}, initialDelaySeconds: 30, periodSeconds: 20}
           resources: {requests: {memory: 512Mi, cpu: 250m}, limits: {memory: 2Gi, cpu: 1000m}}
@@ -112,6 +126,7 @@ spec:
             - {secretRef: {name: omi-secrets}}
           env:
             - {name: USE_VERTEX_AI, value: "false"}
+            - {name: JOBSTORE_PG_DSN, valueFrom: {secretKeyRef: {name: omi-db-app, key: uri}}}
           readinessProbe: {httpGet: {path: /health, port: 8080}, initialDelaySeconds: 15, periodSeconds: 10}
           resources: {requests: {memory: 256Mi, cpu: 100m}, limits: {memory: 1Gi, cpu: 500m}}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
@@ -143,6 +158,7 @@ spec:
             - {secretRef: {name: omi-secrets}}
           env:
             - {name: MEMORY_ENABLED, value: "on"}
+            - {name: JOBSTORE_PG_DSN, valueFrom: {secretKeyRef: {name: omi-db-app, key: uri}}}
           readinessProbe: {httpGet: {path: /health, port: 8080}, initialDelaySeconds: 15, periodSeconds: 10}
           resources: {requests: {memory: 256Mi, cpu: 100m}, limits: {memory: 1Gi, cpu: 500m}}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}

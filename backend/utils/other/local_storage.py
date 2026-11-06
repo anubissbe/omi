@@ -30,7 +30,13 @@ def _contained_path(root: Path, value: str, *, label: str) -> Path:
 
 
 def local_storage_root_from_env() -> Path | None:
-    """Return the validated harness storage root, or ``None`` when disabled."""
+    """Return the validated storage root, or ``None`` when disabled.
+
+    Self-hosted (non-emulator) deployments allow the root too: the gate is the
+    state root being set, optionally with ``OMI_LOCAL_STORAGE_ALLOW_SELFHOSTED=1``
+    when no Firebase emulator runs (Firestore lives in Postgres there, so the
+    demo-/FIRESTORE_EMULATOR_HOST check does not apply).
+    """
 
     raw_root = os.environ.get(LOCAL_STORAGE_ROOT_ENV, '').strip()
     if not raw_root:
@@ -41,8 +47,10 @@ def local_storage_root_from_env() -> Path | None:
         raise RuntimeError(f'{LOCAL_STORAGE_ROOT_ENV} requires {HARNESS_STATE_ROOT_ENV}')
 
     project_id = (os.environ.get('FIREBASE_PROJECT_ID') or '').strip()
-    if not project_id.startswith('demo-') or not os.environ.get('FIRESTORE_EMULATOR_HOST'):
-        raise RuntimeError(f'{LOCAL_STORAGE_ROOT_ENV} is allowed only with the owned local emulator harness')
+    emulator_host = os.environ.get('FIRESTORE_EMULATOR_HOST', '').strip()
+    allow_selfhosted = os.environ.get('OMI_LOCAL_STORAGE_ALLOW_SELFHOSTED', '').strip().lower() in {'1', 'true', 'on', 'yes'}
+    if not ((project_id.startswith('demo-') and emulator_host) or allow_selfhosted):
+        raise RuntimeError(f'{LOCAL_STORAGE_ROOT_ENV} is allowed only with the owned local emulator harness or OMI_LOCAL_STORAGE_ALLOW_SELFHOSTED=1')
 
     state_root = Path(raw_state_root).expanduser().resolve()
     return _contained_path(state_root, raw_root, label=LOCAL_STORAGE_ROOT_ENV)
