@@ -171,14 +171,9 @@ spec:
       containers:
         - name: emulator
           image: andreysenov/firebase-tools:13.35.1
-          command: ["firebase", "emulators:start", "--only", "auth,firestore", "--project", "demo-omi-local"]
+          command: ["sh", "-c", "printf '{\"emulators\":{\"auth\":{\"host\":\"0.0.0.0\",\"port\":9099},\"firestore\":{\"host\":\"0.0.0.0\",\"port\":8080},\"ui\":{\"host\":\"0.0.0.0\",\"port\":4000},\"hub\":{\"host\":\"0.0.0.0\",\"port\":4400}}} ' > /tmp/firebase.json && exec firebase emulators:start --config /tmp/firebase.json --only auth,firestore --project demo-omi-local"]
           env:
             - {name: FIREBASE_TOKEN, value: ""}  # emulator-only, geen login nodig
-            # 0.0.0.0 ipv 127.0.0.1: kubelet-probes en andere pods in het ns moeten erbij
-            - {name: FIRESTORE_EMULATOR_HOST, value: "0.0.0.0:8080"}
-            - {name: FIREBASE_AUTH_EMULATOR_HOST, value: "0.0.0.0:9099"}
-            - {name: FIREBASE_EMULATOR_HUB_HOST, value: "0.0.0.0"}
-            - {name: FIREBASE_EMULATORS_PORT, value: "4000"}
             # update-check/config-store faalt zonder write access op $HOME
             - {name: FIREBASE_CLI_NO_UPDATE_NOTIFIER, value: "true"}
             - {name: XDG_CONFIG_HOME, value: "/tmp/config"}
