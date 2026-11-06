@@ -71,7 +71,7 @@ spec:
           readinessProbe: {httpGet: {path: /v1/health, port: 8080}, initialDelaySeconds: 15, periodSeconds: 10}
           livenessProbe: {httpGet: {path: /v1/health, port: 8080}, initialDelaySeconds: 30, periodSeconds: 20}
           resources: {requests: {memory: 512Mi, cpu: 250m}, limits: {memory: 2Gi, cpu: 1000m}}
-          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}
           volumeMounts: [{name: storage, mountPath: /omi-state}]
       volumes:
         - name: storage
