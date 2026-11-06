@@ -171,7 +171,9 @@ spec:
       containers:
         - name: emulator
           image: andreysenov/firebase-tools:13.35.1
-          command: ["sh", "-c", "printf '{\"emulators\":{\"auth\":{\"host\":\"0.0.0.0\",\"port\":9099},\"firestore\":{\"host\":\"0.0.0.0\",\"port\":8080},\"ui\":{\"host\":\"0.0.0.0\",\"port\":4000},\"hub\":{\"host\":\"0.0.0.0\",\"port\":4400}}} ' > /tmp/firebase.json && exec firebase emulators:start --config /tmp/firebase.json --only auth,firestore --project demo-omi-local"]
+          # --export-on-exit/--import: Firestore+Auth data persists across pod
+          # restarts on the omi-emulator-data PVC (export dir /emulator-data).
+          command: ["sh", "-c", "printf '{\"emulators\":{\"auth\":{\"host\":\"0.0.0.0\",\"port\":9099},\"firestore\":{\"host\":\"0.0.0.0\",\"port\":8080},\"ui\":{\"host\":\"0.0.0.0\",\"port\":4000},\"hub\":{\"host\":\"0.0.0.0\",\"port\":4400}}} ' > /tmp/firebase.json && exec firebase emulators:start --config /tmp/firebase.json --only auth,firestore --project demo-omi-local --export-on-exit /emulator-data --import /emulator-data"]
           env:
             - {name: FIREBASE_TOKEN, value: ""}  # emulator-only, geen login nodig
             # update-check/config-store faalt zonder write access op $HOME
@@ -186,13 +188,15 @@ spec:
           livenessProbe: {tcpSocket: {port: 9099}, initialDelaySeconds: 40, periodSeconds: 20}
           resources: {requests: {memory: 512Mi, cpu: 250m}, limits: {memory: 2Gi, cpu: 1000m}}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: false}
-          # Emulator-data is puur intern (export/import); ephemeral is prima en
-          # voorkomt RWO-schaling-conflicten met andere pods.
           volumeMounts:
-            - {name: data, mountPath: /home/node}
+            - {name: data, mountPath: /emulator-data}
+            - {name: home, mountPath: /home/node}
             - {name: tmp, mountPath: /tmp}
       volumes:
+        # persistente export/import van Firestore+Auth (RWO is genoeg: 1 replica)
         - name: data
+          persistentVolumeClaim: {claimName: omi-emulator-data}
+        - name: home
           emptyDir: {}
         - name: tmp
           emptyDir: {}
@@ -207,7 +211,14 @@ spec:
     - {name: firestore, port: 8080, targetPort: 8080}
     - {name: ui, port: 4000, targetPort: 4000}
 ---
-# (emulator-data PVC verwijderd: de emulator gebruikt emptyDir)
+# Persistente data voor de Firebase emulator (Firestore+Auth export/import).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: omi-emulator-data, namespace: omi}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 10Gi}}
+---
 # PVC voor self-hosted object storage (vervangt GCS): omi-backend mount dit
 # als /omi-state; public URLs via OMI_LOCAL_STORAGE_BASE_URL -> /_local/storage.
 # ReadWriteMany (longhorn exporteert NFS) zodat beide backend-replica's
