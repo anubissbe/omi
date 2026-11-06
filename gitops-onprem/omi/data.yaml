@@ -243,7 +243,7 @@ spec:
       securityContext: {seccompProfile: {type: RuntimeDefault}, runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001}
       containers:
         - name: migrate
-          image: git.euraika.net:5050/euraika/omi/backend:9b5fe93e
+          image: git.euraika.net:5050/euraika/omi/backend:b9a510f79
           command: ["python", "-c",
             "import os, psycopg; from database.jobstore.migrate import migrate, current_version; dsn=os.environ['JOBSTORE_PG_DSN']; conn=psycopg.connect(dsn, autocommit=True); print('applied', migrate(conn)); print('schema version', current_version(conn)); conn.close()"]
           env:
