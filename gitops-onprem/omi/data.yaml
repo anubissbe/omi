@@ -158,10 +158,9 @@ spec:
 # allemaal falen. Project demo-omi-local (demo- prefix is verplicht voor de
 # local-storage gate in local_storage.py).
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata: {name: omi-firebase-emulator, namespace: omi, labels: {app.kubernetes.io/name: omi-firebase-emulator}}
 spec:
-  serviceName: omi-firebase-emulator
   replicas: 1
   selector: {matchLabels: {app.kubernetes.io/name: omi-firebase-emulator}}
   template:
@@ -183,10 +182,12 @@ spec:
           readinessProbe: {httpGet: {path: /, port: 8080}, initialDelaySeconds: 20, periodSeconds: 10}
           resources: {requests: {memory: 512Mi, cpu: 250m}, limits: {memory: 2Gi, cpu: 1000m}}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          # Emulator-data is puur intern (export/import); ephemeral is prima en
+          # voorkomt RWO-schaling-conflicten met andere pods.
           volumeMounts: [{name: data, mountPath: /home/node}]
       volumes:
         - name: data
-          persistentVolumeClaim: {claimName: omi-emulator-data}
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -198,19 +199,14 @@ spec:
     - {name: firestore, port: 8080, targetPort: 8080}
     - {name: ui, port: 4000, targetPort: 4000}
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata: {name: omi-emulator-data, namespace: omi}
-spec:
-  accessModes: [ReadWriteOnce]
-  resources: {requests: {storage: 5Gi}}
----
-# Gedeelde PVC voor self-hosted object storage (vervangt GCS): de app mount
-# /_local/storage via OMI_LOCAL_STORAGE_ROOT en served public URLs via
-# OMI_LOCAL_STORAGE_BASE_URL. Alleen omi-backend heeft de mount nodig.
+# (emulator-data PVC verwijderd: de emulator gebruikt emptyDir)
+# PVC voor self-hosted object storage (vervangt GCS): omi-backend mount dit
+# als /omi-state; public URLs via OMI_LOCAL_STORAGE_BASE_URL -> /_local/storage.
+# ReadWriteMany (longhorn exporteert NFS) zodat beide backend-replica's
+# dezelfde files zien.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata: {name: omi-storage-data, namespace: omi}
 spec:
-  accessModes: [ReadWriteOnce]
+  accessModes: [ReadWriteMany]
   resources: {requests: {storage: 20Gi}}
