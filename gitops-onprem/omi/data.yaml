@@ -183,7 +183,8 @@ spec:
             - {name: auth, containerPort: 9099}
             - {name: firestore, containerPort: 8080}
             - {name: ui, containerPort: 4000}
-          readinessProbe: {httpGet: {path: /, port: 8080}, initialDelaySeconds: 20, periodSeconds: 10}
+          readinessProbe: {tcpSocket: {port: 8080}, initialDelaySeconds: 20, periodSeconds: 10}
+          livenessProbe: {tcpSocket: {port: 9099}, initialDelaySeconds: 40, periodSeconds: 20}
           resources: {requests: {memory: 512Mi, cpu: 250m}, limits: {memory: 2Gi, cpu: 1000m}}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: false}
           # Emulator-data is puur intern (export/import); ephemeral is prima en
