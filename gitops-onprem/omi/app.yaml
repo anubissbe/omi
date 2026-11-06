@@ -60,7 +60,7 @@ spec:
     metadata: {labels: {app.kubernetes.io/name: omi-backend}}
     spec:
       imagePullSecrets: [{name: gitlab-registry}]
-      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      securityContext: {seccompProfile: {type: RuntimeDefault}, fsGroup: 10001}
       containers:
         - name: backend
           image: git.euraika.net:5050/euraika/omi/backend:9b5fe93e
@@ -71,11 +71,19 @@ spec:
           readinessProbe: {httpGet: {path: /v1/health, port: 8080}, initialDelaySeconds: 15, periodSeconds: 10}
           livenessProbe: {httpGet: {path: /v1/health, port: 8080}, initialDelaySeconds: 30, periodSeconds: 20}
           resources: {requests: {memory: 512Mi, cpu: 250m}, limits: {memory: 2Gi, cpu: 1000m}}
-          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}
-          volumeMounts: [{name: storage, mountPath: /omi-state}]
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: storage, mountPath: /omi-state}
+            # main.py maakt _temp/_samples/_segments/_speech_profiles in de CWD (/app)
+            - {name: app-tmp, mountPath: /app/_temp}
+            - {name: app-tmp, mountPath: /app/_samples}
+            - {name: app-tmp, mountPath: /app/_segments}
+            - {name: app-tmp, mountPath: /app/_speech_profiles}
       volumes:
         - name: storage
           persistentVolumeClaim: {claimName: omi-storage-data}
+        - name: app-tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
