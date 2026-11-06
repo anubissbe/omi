@@ -25,7 +25,10 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
     nginx.ingress.kubernetes.io/upstream-hash-by: "$request_uri"
-    # strip /desktop and /pusher prefixes before proxying
+    # Global rewrite-target /$2 strips the prefix on the regex paths below.
+    # The catch-all must therefore be the regex "/()(.*)" (empty first group):
+    # with plain "/" the rewrite "(?i)/" /$2 collapses every unmatched path
+    # (e.g. /v1/auth/...) to a bare "/" and the backend answers 405.
     nginx.ingress.kubernetes.io/rewrite-target: /$2
     nginx.ingress.kubernetes.io/use-regex: "true"
     cert-manager.io/issuer: omi-letsencrypt
@@ -41,6 +44,7 @@ spec:
           # strip the prefix so backends see their native paths
           - {path: /desktop(/|$)(.*), pathType: ImplementationSpecific, backend: {service: {name: omi-desktop-backend, port: {name: http}}}}
           - {path: /pusher(/|$)(.*), pathType: ImplementationSpecific, backend: {service: {name: omi-pusher, port: {name: http}}}}
-          # local storage public URLs (OMI_LOCAL_STORAGE_BASE_URL); long prefix wins over /
+          # local storage public URLs (OMI_LOCAL_STORAGE_BASE_URL); long prefix wins over catch-all
           - {path: /_local(/|$)(.*), pathType: ImplementationSpecific, backend: {service: {name: omi-backend, port: {name: http}}}}
-          - {path: /, pathType: Prefix, backend: {service: {name: omi-backend, port: {name: http}}}}
+          # catch-all as regex with empty first capture group so rewrite-target /$2 keeps the path
+          - {path: /()(.*), pathType: ImplementationSpecific, backend: {service: {name: omi-backend, port: {name: http}}}}
