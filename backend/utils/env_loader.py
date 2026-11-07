@@ -25,11 +25,16 @@ logger = logging.getLogger(__name__)
 VALID_STAGES = frozenset({"prod", "dev", "local", "offline", "selfhosted"})
 
 # ``local`` uses the existing harness filename for backward compatibility.
+# ``selfhosted`` has no committed template: the onprem deployment supplies the
+# whole environment via ConfigMap/Secret, so its stage file simply does not
+# exist (``stage_env_path().is_file()`` skips it) — this entry only makes
+# ``stage_env_filename`` total so a valid stage never KeyErrors.
 STAGE_ENV_FILENAMES: dict[str, str] = {
     "prod": ".env.prod",
     "dev": ".env.dev",
     "local": ".env.local-dev",
     "offline": ".env.offline",
+    "selfhosted": ".env.selfhosted",
 }
 
 _PROVIDER_SECRET_RE = re.compile(
