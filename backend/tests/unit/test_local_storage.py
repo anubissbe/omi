@@ -18,6 +18,22 @@ def _configure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return storage_root
 
 
+def test_local_storage_allowed_selfhosted_without_emulator(monkeypatch, tmp_path):
+    """Self-hosted onprem: Firestore lives in Postgres, no FIRESTORE_EMULATOR_HOST —
+    OMI_LOCAL_STORAGE_ALLOW_SELFHOSTED=1 opens the gate instead of the demo- emulator check."""
+    state_root = tmp_path / 'state'
+    storage_root = state_root / 'storage'
+    monkeypatch.setenv('OMI_HARNESS_STATE_ROOT', str(state_root))
+    monkeypatch.setenv('OMI_LOCAL_STORAGE_ROOT', str(storage_root))
+    monkeypatch.setenv('OMI_LOCAL_STORAGE_BASE_URL', 'https://api.omi.euraika.dev/_local/storage')
+    monkeypatch.setenv('FIREBASE_PROJECT_ID', 'omi-euraika')  # not demo-
+    monkeypatch.delenv('FIRESTORE_EMULATOR_HOST', raising=False)
+    with pytest.raises(RuntimeError, match='ALLOW_SELFHOSTED'):
+        local_storage_root_from_env()
+    monkeypatch.setenv('OMI_LOCAL_STORAGE_ALLOW_SELFHOSTED', '1')
+    assert local_storage_root_from_env() == storage_root.resolve()
+
+
 def test_local_storage_round_trip_and_http_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     storage_root = _configure(monkeypatch, tmp_path)
     client = LocalStorageClient.from_env()

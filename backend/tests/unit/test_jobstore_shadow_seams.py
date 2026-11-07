@@ -37,7 +37,7 @@ def _module(name: str):
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch):
     monkeypatch.setattr(dual_store, '_SHADOWED', {})
-    for name in ('BATCH_JOBSTORE_MODE', 'JOBSTORE_PG_HOST', 'JOBSTORE_PG_DATABASE', 'JOBSTORE_PG_USER'):
+    for name in ('BATCH_JOBSTORE_MODE', 'JOBSTORE_PG_HOST', 'JOBSTORE_PG_DATABASE', 'JOBSTORE_PG_USER', 'JOBSTORE_PG_DSN'):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -105,6 +105,50 @@ def test_seam_failure_keeps_the_plain_primary(monkeypatch):
     monkeypatch.setattr(dual_store, 'shadow_from_env', lambda _p: (_ for _ in ()).throw(RuntimeError('x')))
     primary = FirestoreStore('batch_pipeline_dev')
     assert hook.shadow_from_env(primary) is primary
+
+
+def test_dsn_takes_precedence_over_iam_triple(monkeypatch):
+    """Self-hosted: JOBSTORE_PG_DSN (password auth, no ADC) wins over HOST/DATABASE/USER."""
+    monkeypatch.setenv('OMI_ENV_STAGE', 'dev')
+    monkeypatch.setenv('BATCH_JOBSTORE_MODE', 'shadow')
+    monkeypatch.setenv('JOBSTORE_PG_DSN', 'postgresql://omi:secret@omi-db-rw:5432/omi')
+    _shadow_settings(monkeypatch)  # IAM triple also set; DSN must win
+    captured = {}
+    import database.jobstore.connection as conn_mod
+
+    def fake_pool(dsn, *, size, connect):
+        captured['dsn'] = dsn
+        captured['connect'] = connect
+
+        class _P:
+            def close(self):
+                pass
+
+        return _P()
+
+    monkeypatch.setattr('database.jobstore.connection.Pool', fake_pool)
+    # iam_connector would call google.auth.default -> hermetic network blocks it;
+    # a DSN path must never reach that call. shadow_from_env imports
+    # iam_connector lazily from connection, so patch it there.
+    def forbidden_iam(*_a, **_k):
+        raise AssertionError('iam_connector must not be used when JOBSTORE_PG_DSN is set')
+
+    monkeypatch.setattr(conn_mod, 'iam_connector', forbidden_iam)
+    store = dual_store.shadow_from_env(FirestoreStore('batch_pipeline_dev'))
+    assert isinstance(store, DualStore)
+    assert captured['connect'] is not None
+
+
+def test_dsn_alone_is_enough_no_iam_triple(monkeypatch):
+    """Self-hosted: a DSN without HOST/DATABASE/USER must not refuse as 'unconfigured'."""
+    monkeypatch.setenv('OMI_ENV_STAGE', 'dev')
+    monkeypatch.setenv('BATCH_JOBSTORE_MODE', 'shadow')
+    monkeypatch.setenv('JOBSTORE_PG_DSN', 'postgresql://omi:secret@omi-db-rw:5432/omi')
+    import database.jobstore.connection as conn_mod
+
+    monkeypatch.setattr('database.jobstore.connection.Pool', lambda dsn, *, size, connect: type('P', (), {'close': lambda s: None})())
+    store = dual_store.shadow_from_env(FirestoreStore('batch_pipeline_dev'))
+    assert isinstance(store, DualStore)
 
 
 @pytest.mark.parametrize(

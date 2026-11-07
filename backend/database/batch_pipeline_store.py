@@ -107,10 +107,11 @@ def contention_tables(view: 'FirestoreTransaction') -> tuple[str, str]:
 
 
 class FirestoreTransaction:
-    def __init__(self, client: Any, namespace: str, transaction: Any):
+    def __init__(self, client: Any, namespace: str, transaction: Any, *, read_budget=None):
         self.client = client
         self.namespace = namespace
         self.transaction = transaction
+        self.read_budget = read_budget
         self.cache: dict[tuple[str, str], dict] = {}
         self.writes: dict[tuple[str, str], dict] = {}
         self.patches: dict[tuple[str, str], dict] = {}
@@ -137,7 +138,10 @@ class FirestoreTransaction:
     def get(self, table: str, key: str) -> dict:
         address = (table, key)
         if address not in self.cache:
-            snapshot = self._ref(table, key).get(transaction=self.transaction)
+            options = {}
+            if self.read_budget is not None:
+                options = dict(timeout=self.read_budget.timeout(10), retry=None)
+            snapshot = self._ref(table, key).get(transaction=self.transaction, **options)
             self.cache[address] = (snapshot.to_dict() or {}) if snapshot.exists else {}
         return deepcopy({**self.writes.get(address, self.cache[address]), **self.patches.get(address, {})})
 
@@ -179,8 +183,10 @@ class FirestoreTransaction:
         if lever_enabled('batch_privacy_memoize', uid):
             # FirestoreStore.run creates this view anew on every callback retry.
             if not hasattr(self, '_privacy_memo'):
-                self._privacy_memo = BatchPrivacyMemo(self.client, self.transaction)
+                self._privacy_memo = BatchPrivacyMemo(self.client, self.transaction, read_budget=self.read_budget)
             options['memo'] = self._privacy_memo
+        if self.read_budget is not None:
+            options['read_budget'] = self.read_budget
         return assert_batch_write_allowed(
             self.client,
             self.transaction,
@@ -223,10 +229,11 @@ class FirestoreTransaction:
 class FirestoreStore:
     def __init__(self, namespace: str, *, firestore_client: Any = None):
         # Require a stage-qualified name; never infer dev from the customer project.
-        if namespace not in {'batch_pipeline_prod', 'batch_pipeline_dev'} and not re.fullmatch(
+        # selfhosted uses batch_pipeline_selfhosted with the onprem Postgres jobstore.
+        if namespace not in {'batch_pipeline_prod', 'batch_pipeline_dev', 'batch_pipeline_selfhosted'} and not re.fullmatch(
             r'batch_pipeline_test_[a-z0-9_]{1,40}', namespace
         ):
-            raise ValueError('explicit batch_pipeline_{prod,dev,test_<id>} namespace required')
+            raise ValueError('explicit batch_pipeline_{prod,dev,selfhosted,test_<id>} namespace required')
         self.namespace = namespace
         self._client = firestore_client
         self._require_stage()
@@ -240,7 +247,7 @@ class FirestoreStore:
                 raise RuntimeError('injected test client must be bound to the loopback emulator')
         else:
             stage = os.getenv('OMI_ENV_STAGE', '').strip().lower()
-            if stage not in {'prod', 'dev'} or self.namespace != f'batch_pipeline_{stage}':
+            if stage not in {'prod', 'dev', 'selfhosted'} or self.namespace != f'batch_pipeline_{stage}':
                 raise RuntimeError('batch namespace must match explicit runtime stage')
 
     @property

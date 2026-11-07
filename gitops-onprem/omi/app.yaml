@@ -1,0 +1,175 @@
+# Omi applicatielaag op onprem: backend (FastAPI, poort 8080), desktop-backend
+# (Rust-compatibele Python desktop API, poort 8080) en pusher (WebSocket, poort 8080).
+# Images: git.euraika.net:5050/euraika/omi/<svc>:<sha> — gebouwd door .gitlab-ci.yml
+# jobs build-image-* in euraika/omi. Tags hier handmatig meebewegen na een image-build.
+#
+# Env-bron: ConfigMap omi-env (onderaan) + Secret omi-secrets (zie secrets.md).
+# Belangrijkste routing:
+#   backend          -> HOSTED_PUSHER_API_URL=http://omi-pusher:8080 (pusher pad aan)
+#   pusher           -> MEMORY_ENABLED=on (static capability admission)
+#   alle drie        -> REDIS/TYPESENSE/QDRANT naar de datalaag-Services in data.yaml
+#   vector DB        -> PINECONE_* unset; backend valt terug op no-op zonder keys
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: omi-env, namespace: omi}
+data:
+  OMI_ENV_STAGE: "selfhosted"
+  ENVIRONMENT: "selfhosted"
+  BASE_API_URL: "https://api.omi.euraika.dev"
+  API_BASE_URL: "https://api.omi.euraika.dev"
+  HOSTED_PUSHER_API_URL: "http://omi-pusher:8080"
+  REDIS_DB_HOST: "omi-redis"
+  REDIS_DB_PORT: "6379"
+  TYPESENSE_HOST: "omi-typesense"
+  TYPESENSE_HOST_PORT: "8108"
+  TYPESENSE_PROTOCOL: "http"
+  MEMORY_ENABLED: "on"
+  MEMORY_MODE: "read"
+  # Vector DB: Qdrant via PINECONE-compatibele adapter is Phase 3; zonder
+  # PINECONE_API_KEY/PINECONE_INDEX_NAME is vector_db.py een no-op (veilig).
+  # STT/LLM: keys uit omi-secrets (Mistral via OPENAI_BASE_URL of eigen endpoint).
+  OMI_LLM_GATEWAY_FEATURE_MODE: "off"
+  SCREEN_FRAME_EGRESS_ENABLED: "false"
+  # STT chain: self-hosted Parakeet first, no Soniox (no key on selfhosted)
+  STT_SERVICE_MODELS: "parakeet,modulate-velma-2"
+  # Modulate needs a key too; without it selection skips it and falls to parakeet
+  # (or no-op when PINECONE/STT are unset). Set MODULATE_API_KEY in omi-secrets if used.
+  # ── Self-hosted Google-vervangers (geen ADC op onprem) ──
+  # Firebase emulator-suite in de namespace (omi-firebase-emulator): auth 9099
+  # + firestore 8080. FIRESTORE_EMULATOR_HOST zorgt dat álle Firestore clients
+  # (ook customer-data) naar de emulator gaan i.p.v. ADC -> geen
+  # DefaultCredentialsError-warnings meer. Postgres omi-db draait als jobstore
+  # in shadow-mode ernaast (BATCH_JOBSTORE_MODE).
+  FIRESTORE_EMULATOR_HOST: "omi-firebase-emulator:8080"
+  FIREBASE_AUTH_EMULATOR_HOST: "omi-firebase-emulator:9099"
+  FIREBASE_PROJECT_ID: "demo-omi-local"
+  FIREBASE_AUTH_PROJECT_ID: "demo-omi-local"
+  # ── Postgres job store (workstream A): BATCH_JOBSTORE_MODE=shadow spiegelt
+  #    de batch jobstore naar Postgres; DSN komt uit CNPG-secret omi-db-app.
+  #    OMI_ENV_STAGE=selfhosted is geen 'prod', dus de staging-fence laat de
+  #    shadow toe op elke namespace behalve batch_pipeline_prod.
+  BATCH_JOBSTORE_MODE: "shadow"
+  JOBSTORE_PG_HOST: "omi-db-rw"
+  JOBSTORE_PG_DATABASE: "omi"
+  JOBSTORE_PG_USER: "omi"
+  # Lokale file storage i.p.v. GCS: root is een PVC-mount; public URLs worden
+  # door de backend zelf geserveerd via /_local/storage (zie main.py).
+  # Met FIRESTORE_EMULATOR_HOST + demo- project is de gate automatisch open;
+  # ALLOW_SELFHOSTED=1 houdt de gate ook open als de emulator ooit weg is.
+  OMI_HARNESS_STATE_ROOT: "/omi-state"
+  OMI_LOCAL_STORAGE_ROOT: "/omi-state/storage"
+  OMI_LOCAL_STORAGE_BASE_URL: "https://api.omi.euraika.dev/_local/storage"
+  OMI_LOCAL_STORAGE_ALLOW_SELFHOSTED: "1"
+  # ADC/GCE-probing uitschakelen zodat er geen DefaultCredentialsError-warnings
+  # meer komen uit de lazy GCS clients.
+  GOOGLE_AUTH_DISABLE_GCE_CHECK: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: omi-backend, namespace: omi, labels: {app.kubernetes.io/name: omi-backend}}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app.kubernetes.io/name: omi-backend}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: omi-backend}}
+    spec:
+      imagePullSecrets: [{name: gitlab-registry}]
+      securityContext: {seccompProfile: {type: RuntimeDefault}, fsGroup: 10001}
+      containers:
+        - name: backend
+          image: git.euraika.net:5050/euraika/omi/backend:7deed55f
+          ports: [{name: http, containerPort: 8080}]
+          envFrom:
+            - {configMapRef: {name: omi-env}}
+            - {secretRef: {name: omi-secrets}}
+          env:
+            # CNPG app-secret key `uri` -> JOBSTORE_PG_DSN (DSN wint boven de IAM-triple)
+            - {name: JOBSTORE_PG_DSN, valueFrom: {secretKeyRef: {name: omi-db-app, key: uri}}}
+          readinessProbe: {httpGet: {path: /v1/health, port: 8080}, initialDelaySeconds: 15, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /v1/health, port: 8080}, initialDelaySeconds: 30, periodSeconds: 20}
+          resources: {requests: {memory: 512Mi, cpu: 250m}, limits: {memory: 2Gi, cpu: 1000m}}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: storage, mountPath: /omi-state}
+            # main.py maakt _temp/_samples/_segments/_speech_profiles in de CWD (/app)
+            - {name: app-tmp, mountPath: /app/_temp}
+            - {name: app-tmp, mountPath: /app/_samples}
+            - {name: app-tmp, mountPath: /app/_segments}
+            - {name: app-tmp, mountPath: /app/_speech_profiles}
+      volumes:
+        - name: storage
+          persistentVolumeClaim: {claimName: omi-storage-data}
+        - name: app-tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: omi-backend, namespace: omi, labels: {app.kubernetes.io/name: omi-backend}}
+spec:
+  selector: {app.kubernetes.io/name: omi-backend}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: omi-desktop-backend, namespace: omi, labels: {app.kubernetes.io/name: omi-desktop-backend}}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app.kubernetes.io/name: omi-desktop-backend}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: omi-desktop-backend}}
+    spec:
+      imagePullSecrets: [{name: gitlab-registry}]
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: desktop-backend
+          image: git.euraika.net:5050/euraika/omi/desktop-backend:7deed55f
+          ports: [{name: http, containerPort: 8080}]
+          envFrom:
+            - {configMapRef: {name: omi-env}}
+            - {secretRef: {name: omi-secrets}}
+          env:
+            - {name: USE_VERTEX_AI, value: "false"}
+            - {name: JOBSTORE_PG_DSN, valueFrom: {secretKeyRef: {name: omi-db-app, key: uri}}}
+          readinessProbe: {httpGet: {path: /health, port: 8080}, initialDelaySeconds: 15, periodSeconds: 10}
+          resources: {requests: {memory: 256Mi, cpu: 100m}, limits: {memory: 1Gi, cpu: 500m}}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: omi-desktop-backend, namespace: omi, labels: {app.kubernetes.io/name: omi-desktop-backend}}
+spec:
+  selector: {app.kubernetes.io/name: omi-desktop-backend}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: omi-pusher, namespace: omi, labels: {app.kubernetes.io/name: omi-pusher}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: omi-pusher}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: omi-pusher}}
+    spec:
+      imagePullSecrets: [{name: gitlab-registry}]
+      securityContext: {seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: pusher
+          image: git.euraika.net:5050/euraika/omi/pusher:7deed55f
+          ports: [{name: http, containerPort: 8080}]
+          envFrom:
+            - {configMapRef: {name: omi-env}}
+            - {secretRef: {name: omi-secrets}}
+          env:
+            - {name: MEMORY_ENABLED, value: "on"}
+            - {name: JOBSTORE_PG_DSN, valueFrom: {secretKeyRef: {name: omi-db-app, key: uri}}}
+          readinessProbe: {httpGet: {path: /health, port: 8080}, initialDelaySeconds: 15, periodSeconds: 10}
+          resources: {requests: {memory: 256Mi, cpu: 100m}, limits: {memory: 1Gi, cpu: 500m}}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: omi-pusher, namespace: omi, labels: {app.kubernetes.io/name: omi-pusher}}
+spec:
+  selector: {app.kubernetes.io/name: omi-pusher}
+  ports: [{name: http, port: 8080, targetPort: 8080}]

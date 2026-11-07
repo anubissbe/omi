@@ -83,6 +83,16 @@ types (`TaskActionItem`, `PowerMonitor`, etc.) and needs a shared-models carve-o
 code in a feature directory (`Onboarding/`, `MainWindow/`, `Chat/`, etc.). CI
 enforces this via `scripts/check-sources-root-layout.py`.
 
+**GitLab CI builds** (`ci/gitlab-build.sh`, project `euraika/omi` on
+git.euraika.net) bake the backend URLs into the bundle `.env` and default to the
+self-hosted backend: `OMI_PYTHON_API_URL=https://api.omi.euraika.dev`,
+`OMI_DESKTOP_API_URL=https://api.omi.euraika.dev/desktop`,
+`OMI_AUTH_API_URL=https://api.omi.euraika.dev`, `OMI_ENV_STAGE=selfhosted`
+(override with `OMI_CI_PYTHON_API_URL` / `OMI_CI_DESKTOP_API_URL` /
+`OMI_CI_AUTH_API_URL` pipeline variables). The REST base and the WebSocket
+`/v4/listen` both derive from `OMI_PYTHON_API_URL` in
+`TranscriptionService.swift`, so one base URL covers both.
+
 When carving out additional leaf modules, prefer bottom-up order (models and
 storage before UI) and wire `import` + `public` on the extracted target's API.
 

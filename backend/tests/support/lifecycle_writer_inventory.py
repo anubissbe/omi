@@ -66,7 +66,7 @@ FIELD_SITES = {
         ('ProjectionStore.complete.commit', 'projection_state', "'ready'", ('projection_state',)),
         ('ProjectionStore.complete.commit', 'state', "'ready'", ('conversation_id', 'created', 'state')),
         ('ProjectionStore.complete_partial.commit', 'state', "'ready'", ('conversation_id', 'created', 'state')),
-        ('ProjectionStore.hold_for_quarantine.commit', 'projection_state', "'quarantine_held'", ('projection_state',)),
+        ('ProjectionStore.hold_for_quarantine.commit', 'projection_state', "'ready'", ('projection_state',)),
         (
             'ProjectionStore.mark_enrichment.commit',
             'state',
@@ -621,6 +621,29 @@ FIELD_SITES = {
                 'status',
             ),
         ),
+        # Zero-preview server-batch transaction: job terminal, conversation
+        # terminal/relevance update, and the relevance input snapshot.
+        (
+            '_complete_server_batch_capture_txn',
+            'status',
+            "'completed'",
+            (
+                'completed_at',
+                'fanout_completed_at',
+                'fanout_key',
+                'fanout_lease_epoch',
+                'fanout_status',
+                'finalization_outcome',
+                'last_failure_code',
+                'lease_expires_at',
+                'reconcile_after_at',
+                'status',
+                'terminal_outcome',
+                'updated_at',
+            ),
+        ),
+        ('_complete_server_batch_capture_txn', 'status', "'completed'", ('relevance_decision', 'status')),
+        ('_complete_server_batch_capture_txn', 'status', "'completed'", ('status',)),
         (
             '_create_or_get_finalization_intent_txn',
             'finalization_status',
@@ -2563,6 +2586,13 @@ FIELD_SITES = {
         ('prepare', 'summary_due_at', "data['summary_first_pending_at'] + deadline_seconds()", ('summary_due_at',)),
         ('prepare', 'summary_first_pending_at', 'current', ('summary_first_pending_at',)),
         ('prepare', 'summary_first_pending_at', 'current', ('summary_first_pending_at',)),
+        ('rearm_on_revision_change', 'summary_due_at', 'None', ('summary_blocked_reason', 'summary_due_at')),
+        (
+            'rearm_on_revision_change',
+            'summary_due_at',
+            'current + deadline_seconds()',
+            ('summary_blocked_reason', 'summary_due_at', 'summary_empty_failures', 'summary_empty_rearms'),
+        ),
     ],
     'utils/conversations/transcript_for_llm.py': [
         ('render_cluster_transcript', 'status', "'resolved' if resolution_available else 'unavailable'", ('status',))

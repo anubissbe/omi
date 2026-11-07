@@ -719,8 +719,12 @@ def shadow_from_env(primary: Any) -> Any:
     if not jobstore_shadow_admits(namespace):
         logger.warning('event=jobstore_shadow outcome=refused reason=prod_namespace')
         return primary
+    # Self-hosted (onprem) deployments have no ADC for the IAM connector: a full
+    # DSN (incl. password, e.g. the CNPG app-secret `uri`) takes precedence over
+    # the IAM host/database/user triple.
+    dsn = os.getenv('JOBSTORE_PG_DSN', '').strip()
     target = [os.getenv(name, '').strip() for name in ('JOBSTORE_PG_HOST', 'JOBSTORE_PG_DATABASE', 'JOBSTORE_PG_USER')]
-    if not all(target):
+    if not dsn and not all(target):
         logger.warning('event=jobstore_shadow outcome=refused reason=unconfigured')
         return primary
     if importlib.util.find_spec('psycopg') is None:  # an image without the driver would only count errors
@@ -729,10 +733,11 @@ def shadow_from_env(primary: Any) -> Any:
     with _SHADOWED_LOCK:
         if namespace in _SHADOWED:
             return _SHADOWED[namespace]
-        from database.jobstore.connection import Pool, iam_connector
+        from database.jobstore.connection import Pool, dial, iam_connector
         from database.jobstore.postgres_store import PostgresStore
 
-        pool = Pool('', size=2, connect=iam_connector(*target))
+        connect = (lambda: dial(dsn)) if dsn else iam_connector(*target)
+        pool = Pool('', size=2, connect=connect)
         shadow = PostgresStore(namespace, pool=pool, customer_client=None)
         _SHADOWED[namespace] = DualStore(primary, shadow)
         logger.info('event=jobstore_shadow outcome=enabled')

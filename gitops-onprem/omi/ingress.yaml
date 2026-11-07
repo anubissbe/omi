@@ -1,0 +1,50 @@
+# Publieke route: api.omi.euraika.dev
+#   /              -> omi-backend:8080        (FastAPI main API, /v1/...)
+#   /desktop       -> omi-desktop-backend:8080 (desktop Rust-compat API)
+#   /pusher        -> omi-pusher:8080          (WebSocket listen/stream)
+# TLS: Let's Encrypt HTTP-01 via namespace-Issuer omi-letsencrypt (zelfde patroon
+# als chatioo). DNS: api.omi.euraika.dev -> ingress-nginx addresses (192.168.1.121 etc.).
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata: {name: omi-letsencrypt, namespace: omi}
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef: {name: omi-letsencrypt-account}
+    solvers:
+      - http01: {ingress: {ingressClassName: nginx}}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: omi
+  namespace: omi
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 110m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$request_uri"
+    # Global rewrite-target /$2 strips the prefix on the regex paths below.
+    # The catch-all must therefore be the regex "/()(.*)" (empty first group):
+    # with plain "/" the rewrite "(?i)/" /$2 collapses every unmatched path
+    # (e.g. /v1/auth/...) to a bare "/" and the backend answers 405.
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    cert-manager.io/issuer: omi-letsencrypt
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [api.omi.euraika.dev]
+      secretName: omi-api-tls
+  rules:
+    - host: api.omi.euraika.dev
+      http:
+        paths:
+          # strip the prefix so backends see their native paths
+          - {path: /desktop(/|$)(.*), pathType: ImplementationSpecific, backend: {service: {name: omi-desktop-backend, port: {name: http}}}}
+          - {path: /pusher(/|$)(.*), pathType: ImplementationSpecific, backend: {service: {name: omi-pusher, port: {name: http}}}}
+          # local storage public URLs (OMI_LOCAL_STORAGE_BASE_URL); long prefix wins over catch-all
+          - {path: /_local(/|$)(.*), pathType: ImplementationSpecific, backend: {service: {name: omi-backend, port: {name: http}}}}
+          # catch-all as regex with empty first capture group so rewrite-target /$2 keeps the path
+          - {path: /()(.*), pathType: ImplementationSpecific, backend: {service: {name: omi-backend, port: {name: http}}}}
