@@ -36,8 +36,12 @@ data:
   # Modulate needs a key too; without it selection skips it and falls to parakeet
   # (or no-op when PINECONE/STT are unset). Set MODULATE_API_KEY in omi-secrets if used.
   # ── Self-hosted Google-vervangers (geen ADC op onprem) ──
-  # Auth emulator in de namespace (omi-firebase-emulator, ALLEEN auth; Firestore
-  # zit in Postgres — zie omi-db Cluster in data.yaml).
+  # Firebase emulator-suite in de namespace (omi-firebase-emulator): auth 9099
+  # + firestore 8080. FIRESTORE_EMULATOR_HOST zorgt dat álle Firestore clients
+  # (ook customer-data) naar de emulator gaan i.p.v. ADC -> geen
+  # DefaultCredentialsError-warnings meer. Postgres omi-db draait als jobstore
+  # in shadow-mode ernaast (BATCH_JOBSTORE_MODE).
+  FIRESTORE_EMULATOR_HOST: "omi-firebase-emulator:8080"
   FIREBASE_AUTH_EMULATOR_HOST: "omi-firebase-emulator:9099"
   FIREBASE_PROJECT_ID: "demo-omi-local"
   FIREBASE_AUTH_PROJECT_ID: "demo-omi-local"
@@ -51,8 +55,8 @@ data:
   JOBSTORE_PG_USER: "omi"
   # Lokale file storage i.p.v. GCS: root is een PVC-mount; public URLs worden
   # door de backend zelf geserveerd via /_local/storage (zie main.py).
-  # Zonder FIRESTORE_EMULATOR_HOST (Firestore zit in Postgres) moet de
-  # selfhosted-gate expliciet open: OMI_LOCAL_STORAGE_ALLOW_SELFHOSTED=1.
+  # Met FIRESTORE_EMULATOR_HOST + demo- project is de gate automatisch open;
+  # ALLOW_SELFHOSTED=1 houdt de gate ook open als de emulator ooit weg is.
   OMI_HARNESS_STATE_ROOT: "/omi-state"
   OMI_LOCAL_STORAGE_ROOT: "/omi-state/storage"
   OMI_LOCAL_STORAGE_BASE_URL: "https://api.omi.euraika.dev/_local/storage"
@@ -74,7 +78,7 @@ spec:
       securityContext: {seccompProfile: {type: RuntimeDefault}, fsGroup: 10001}
       containers:
         - name: backend
-          image: git.euraika.net:5050/euraika/omi/backend:b9a510f7
+          image: git.euraika.net:5050/euraika/omi/backend:474d1484
           ports: [{name: http, containerPort: 8080}]
           envFrom:
             - {configMapRef: {name: omi-env}}
@@ -119,7 +123,7 @@ spec:
       securityContext: {seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: desktop-backend
-          image: git.euraika.net:5050/euraika/omi/desktop-backend:b9a510f7
+          image: git.euraika.net:5050/euraika/omi/desktop-backend:474d1484
           ports: [{name: http, containerPort: 8080}]
           envFrom:
             - {configMapRef: {name: omi-env}}
@@ -151,7 +155,7 @@ spec:
       securityContext: {seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: pusher
-          image: git.euraika.net:5050/euraika/omi/pusher:b9a510f7
+          image: git.euraika.net:5050/euraika/omi/pusher:474d1484
           ports: [{name: http, containerPort: 8080}]
           envFrom:
             - {configMapRef: {name: omi-env}}

@@ -177,9 +177,13 @@ spec:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {memory: 1Gi}
 ---
-# ── Firebase emulator-suite ALLEEN voor Auth (9099): Firestore zit nu in
-#    Postgres (jobstore), Auth kan niet zonder emulator op onprem (geen ADC).
-#    Geen Firestore meer hier -> geen export/import loop, geen PVC nodig.
+# ── Firebase emulator-suite: Auth (9099) + Firestore (8080) op onprem, want
+#    zonder FIRESTORE_EMULATOR_HOST vallen de customer-data Firestore clients
+#    terug op ADC -> DefaultCredentialsError-warnings (geen GCE metadata server
+#    op onprem). Postgres (omi-db) draait ALS jobstore in shadow-mode ernaast;
+#    de primaire customer-data store is deze Firestore-emulator.
+#    Persistentie: 60s export-loop via Emulator Hub POST /_admin/export naar
+#    /emulator-data/export op de omi-emulator-data PVC + --import bij startup.
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: omi-firebase-emulator, namespace: omi, labels: {app.kubernetes.io/name: omi-firebase-emulator}}
@@ -190,28 +194,46 @@ spec:
     metadata: {labels: {app.kubernetes.io/name: omi-firebase-emulator}}
     spec:
       imagePullSecrets: [{name: gitlab-registry}]
-      securityContext: {seccompProfile: {type: RuntimeDefault}, runAsNonRoot: true, runAsUser: 1000}
-      terminationGracePeriodSeconds: 30
+      securityContext: {seccompProfile: {type: RuntimeDefault}, runAsNonRoot: true, runAsUser: 1000, fsGroup: 1000}
+      # tijd voor de export-trap om te flushen vóór de pod kill
+      terminationGracePeriodSeconds: 60
       containers:
         - name: emulator
           image: andreysenov/firebase-tools:13.35.1
-          command: ["sh", "-c", "printf '{\"emulators\":{\"auth\":{\"host\":\"0.0.0.0\",\"port\":9099},\"ui\":{\"host\":\"0.0.0.0\",\"port\":4000},\"hub\":{\"host\":\"0.0.0.0\",\"port\":4400}}} ' > /tmp/firebase.json && exec firebase emulators:start --config /tmp/firebase.json --only auth --project demo-omi-local"]
+          # --export-on-exit is onbetrouwbaar onder `kubectl delete` (sh wrapper
+          # gedood vóór flush; rmdir() van de target-dir faalt op de PVC root),
+          # dus export via Hub admin API (POST /_admin/export, body {path,
+          # initiatedBy}) naar /emulator-data/export. Busy-flag serialiseert
+          # exports. --import /emulator-data/export herlaadt bij startup.
+          command: ["sh", "-c", "mkdir -p /emulator-data/export && printf '{\"emulators\":{\"auth\":{\"host\":\"0.0.0.0\",\"port\":9099},\"firestore\":{\"host\":\"0.0.0.0\",\"port\":8080},\"ui\":{\"host\":\"0.0.0.0\",\"port\":4000},\"hub\":{\"host\":\"0.0.0.0\",\"port\":4400}}} ' > /tmp/firebase.json && firebase emulators:start --config /tmp/firebase.json --only auth,firestore --project demo-omi-local --import /emulator-data/export & EMU=$!; export_to() { [ -f /tmp/export-busy ] && return 0; touch /tmp/export-busy; node -e \"const b=JSON.stringify({path:'/emulator-data/export',initiatedBy:'omi-pvc'});require('http').request({host:'127.0.0.1',port:4400,path:'/_admin/export',method:'POST',headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(b)}},r=>r.resume()).on('error',()=>{}).end(b)\" 2>/dev/null; rm -f /tmp/export-busy; }; (while kill -0 $EMU 2>/dev/null; do export_to; sleep 60; done) & EXP=$!; trap 'kill -TERM $EMU' TERM INT; wait $EMU; kill $EXP 2>/dev/null; export_to; sleep 5"]
           env:
             - {name: FIREBASE_TOKEN, value: ""}  # emulator-only, geen login nodig
+            # Firestore emulator = JVM: heap-cap 6g zodat hij niet de hele 8Gi limit opeet
+            - {name: JAVA_TOOL_OPTIONS, value: "-Xmx6g"}
             - {name: FIREBASE_CLI_NO_UPDATE_NOTIFIER, value: "true"}
             - {name: XDG_CONFIG_HOME, value: "/tmp/config"}
             - {name: XDG_CACHE_HOME, value: "/tmp/cache"}
           ports:
             - {name: auth, containerPort: 9099}
+            - {name: firestore, containerPort: 8080}
             - {name: ui, containerPort: 4000}
-          readinessProbe: {tcpSocket: {port: 9099}, initialDelaySeconds: 15, periodSeconds: 10}
-          livenessProbe: {tcpSocket: {port: 9099}, initialDelaySeconds: 30, periodSeconds: 20}
-          resources: {requests: {memory: 256Mi, cpu: 100m}, limits: {memory: 1Gi, cpu: 500m}}
-          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          readinessProbe: {tcpSocket: {port: 8080}, initialDelaySeconds: 20, periodSeconds: 10}
+          livenessProbe: {tcpSocket: {port: 9099}, initialDelaySeconds: 40, periodSeconds: 20}
+          # Firestore emulator houdt de hele DB in JVM-heap: OOMKilled op 2Gi
+          # met een paar duizend docs. 8Gi headroom + expliciete max heap.
+          resources: {requests: {memory: 1Gi, cpu: 250m}, limits: {memory: 8Gi, cpu: 2000m}}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: false}
           volumeMounts:
+            # GEEN subPath: firebase-tools' export doet rmdir('/emulator-data')
+            # wat faalt op een subPath-mount (EACCES). De hele PVC is van
+            # fsGroup 1000, dus direct mounten mag.
+            - {name: data, mountPath: /emulator-data}
             - {name: home, mountPath: /home/node}
             - {name: tmp, mountPath: /tmp}
       volumes:
+        # persistente export/import van Firestore+Auth (RWO genoeg: 1 replica)
+        - name: data
+          persistentVolumeClaim: {claimName: omi-emulator-data}
         - name: home
           emptyDir: {}
         - name: tmp
@@ -224,7 +246,18 @@ spec:
   selector: {app.kubernetes.io/name: omi-firebase-emulator}
   ports:
     - {name: auth, port: 9099, targetPort: 9099}
+    - {name: firestore, port: 8080, targetPort: 8080}
     - {name: ui, port: 4000, targetPort: 4000}
+---
+# Persistente data voor de Firebase emulator (Firestore+Auth export/import).
+# Firestore export is ~2-3x de ruwe doc-grootte, dus 50Gi dekt ~15-20M docs
+# van 1KB; bij meer: PVC vergroten (longhorn staat volume expansion toe).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: omi-emulator-data, namespace: omi}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 50Gi}}
 ---
 # ── Init-job voor het jobstore-schema: draait de in-tree migraties
 #    (database/jobstore/migrations/*.sql) tegen omi-db. Idempotent (advisory
@@ -243,7 +276,7 @@ spec:
       securityContext: {seccompProfile: {type: RuntimeDefault}, runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001}
       containers:
         - name: migrate
-          image: git.euraika.net:5050/euraika/omi/backend:b9a510f7
+          image: git.euraika.net:5050/euraika/omi/backend:474d1484
           command: ["python", "-c",
             "import os, psycopg; from database.jobstore.migrate import migrate, current_version; dsn=os.environ['JOBSTORE_PG_DSN']; conn=psycopg.connect(dsn, autocommit=True); print('applied', migrate(conn)); print('schema version', current_version(conn)); conn.close()"]
           env:
