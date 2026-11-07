@@ -140,8 +140,9 @@ spec:
   accessModes: [ReadWriteOnce]
   resources: {requests: {storage: 5Gi}}
 ---
-# Netwerk: alleen pods in namespace omi en ingress-nginx (kube-system) mogen de
-# datalaag en de app bereiken — zelfde patroon als chatioo-app.
+# Netwerk: pods in namespace omi, ingress-nginx (kube-system) en de CNPG-operator
+# (cnpg-system — die moet omi-db:8000/pg/status bereiken voor cluster-health)
+# mogen de datalaag en de app bereiken — zelfde patroon als chatioo-app.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: omi-app, namespace: omi}
@@ -151,7 +152,12 @@ spec:
   ingress:
     - from:
         - podSelector: {}
-        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
 ---
 # ── Postgres job store (vervangt de Firestore emulator voor de batch job
 #    store, workstream A). CNPG Cluster (zelfde operator als chatioo-db/tip-db);
