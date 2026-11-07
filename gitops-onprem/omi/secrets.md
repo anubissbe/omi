@@ -1,7 +1,8 @@
 # Omi onprem — Secrets aanmaken (eenmalig, vóór de eerste Argo CD sync)
 
-Onprem heeft geen Vault voor app-secrets (alleen argocd-repo's). Maak de Secrets
-met de hand aan in namespace `omi`; toon of commit nooit een waarde.
+Maak de Secrets met de hand aan in namespace `omi`; toon of commit nooit een waarde.
+Zie `secret-locations.md` voor de actuele locaties (1Password items, Vault key voor
+het Argo CD repo-token, cluster Secrets).
 
 ## 1. Namespace + pull-secret
 
@@ -54,15 +55,29 @@ rm -f "$f"
 
 ## 4. Firebase emulator (selfhosted, geen Google Cloud nodig)
 
-De emulator-suite draait als StatefulSet `omi-firebase-emulator` in namespace `omi`
-(Auth 9099, Firestore 8080, project `demo-omi-local`). De env-variabelen
+De emulator-suite draait als Deployment `omi-firebase-emulator` in namespace `omi`
+(Auth 9099, Firestore 8080, UI 4000, project `demo-omi-local`). De env-variabelen
 `FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`, `FIREBASE_PROJECT_ID`
-staan in ConfigMap `omi-env` (app.yaml). Lokale sign-in voor dev/test:
+staan in ConfigMap `omi-env` (app.yaml) — zonder `FIRESTORE_EMULATOR_HOST` vallen
+de Firestore clients terug op ADC en krijg je `DefaultCredentialsError`-warnings.
+Data is persistent: 60s export-loop naar `/emulator-data/export` op PVC
+`omi-emulator-data` + `--import` bij pod-start.
+
+Lokale sign-in voor dev/test:
 
 ```sh
 curl -X POST https://api.omi.euraika.dev/v1/auth/local-dev/custom-token \
-  -d "uid=bert" -d "email=bert@euraika.net"
+  -H 'Content-Type: application/json' -d '{"uid":"bert","email":"bert@euraika.net"}'
 ```
+
+## 4b. Postgres jobstore (CNPG)
+
+`Cluster omi-db` (data.yaml) genereert zelf het app-Secret `omi-db-app` met key `uri`
+(= `JOBSTORE_PG_DSN`, incl. wachtwoord) — **niet handmatig aanmaken**. De DSN wordt
+in de Deployments geïnjecteerd via `secretKeyRef omi-db-app/uri` en wint boven de
+IAM-triple (`JOBSTORE_PG_HOST/DATABASE/USER`). Schema-migraties draaien via Job
+`omi-jobstore-migrate`; bij een nieuwe backend-image deze Job verwijderen (immutable),
+Argo maakt hem opnieuw aan.
 
 ## 5. cert-manager ACME account
 
